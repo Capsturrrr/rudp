@@ -1,0 +1,17 @@
+# Build artifacts
+*.o
+*.out
+bin/
+build/
+
+# Logs (generated during testing, not source)
+logs/*.log
+logs/*.csv
+
+# Editor/OS junk
+.vscode/
+*.swp
+.DS_Store
+
+# Valgrind output
+*.vgcore
