@@ -105,7 +105,12 @@ int main(void) {
             continue;
         }
 
-        if ((pkt.flags & FLAG_SYN) && state == STATE_LISTEN) {
+        if (pkt.flags & FLAG_SYN) {
+            /* Accept a fresh SYN in ANY state, not just LISTEN.
+             * This makes the server resilient to a prior connection being
+             * killed mid-session (Ctrl+C, timeout, crash) — without this,
+             * a stuck non-LISTEN state would silently reject every future
+             * client forever. Real servers must tolerate this. */
             uint32_t client_seq = pkt.seq_num;
             server_seq = (uint32_t)rand();
             expected_seq = client_seq + 1; /* first DATA packet will carry this seq */

@@ -2,12 +2,6 @@
 #include <stdio.h>
 #include "common.h"
 
-/*
- * Simple additive checksum (not cryptographic — this project's focus is
- * reliability/congestion logic, not corruption-proofing). Sums every byte
- * of the header (excluding the checksum field itself) and the payload,
- * then folds it into 16 bits.
- */
 uint16_t rudp_checksum(const rudp_packet_t *pkt) {
     uint32_t sum = 0;
 
@@ -30,7 +24,6 @@ uint16_t rudp_checksum(const rudp_packet_t *pkt) {
         sum += pkt->payload[i];
     }
 
-    /* fold any carry into 16 bits */
     while (sum >> 16) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
@@ -110,7 +103,7 @@ int rudp_unpack(const uint8_t *buf, size_t len, rudp_packet_t *pkt) {
 
     uint16_t computed_checksum = rudp_checksum(pkt);
     if (computed_checksum != recv_checksum) {
-        return -2; /* checksum mismatch — corrupted packet */
+        return -2;
     }
 
     return 0;
