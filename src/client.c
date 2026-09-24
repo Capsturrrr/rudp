@@ -10,32 +10,50 @@
 
 #define HANDSHAKE_TIMEOUT_SEC 3
 #define MAX_HANDSHAKE_RETRIES 5
-#define MAX_CHUNKS 64
+#define MAX_CHUNKS 128
 
 /*
- * Phase 4 client: after the handshake, sends a message split into
- * fixed-size chunks using a Go-Back-N sliding window:
+ * Phase 5 client: same Go-Back-N reliability mechanics as Phase 4
+ * (retransmission timeout, fast retransmit on 3 duplicate ACKs), but
+ * now the window size is no longer a fixed constant — it's driven by
+ * a congestion window `cwnd` that grows and shrinks using AIMD:
  *
- *   - Up to WINDOW_SIZE packets are outstanding (sent, unacked) at once.
- *   - `base` = seq of the oldest unacked packet (the window's left edge).
- *   - `next_seq` = seq of the next packet not yet sent.
- *   - On receiving a cumulative ACK that advances past `base`, the
- *     window slides forward and the retransmission timer resets.
- *   - On receiving a duplicate ACK (same ack_num as last time) 3 times
- *     in a row, we fast-retransmit `base` immediately (no timeout wait).
- *   - On timeout with no new ACK, we retransmit the ENTIRE window from
- *     `base` onward (classic Go-Back-N: resend everything in flight).
+ *   SLOW START:
+ *     cwnd < ssthresh -> cwnd grows by ~1 per ACK (roughly doubles per RTT)
  *
- * `loss_percent` (optional CLI arg) randomly "drops" outgoing DATA
- * packets to let you test retransmission behavior without needing
- * tc/netem yet — e.g. `./client 20` simulates 20% packet loss.
+ *   CONGESTION AVOIDANCE:
+ *     cwnd >= ssthresh -> cwnd grows by ~1/cwnd per ACK (roughly +1 per RTT,
+ *     i.e. linear growth instead of exponential)
+ *
+ *   ON TIMEOUT (loss detected the slow way):
+ *     ssthresh = cwnd / 2;  cwnd = 1        -> back to slow start
+ *
+ *   ON FAST RETRANSMIT (loss detected fast, via 3 dup ACKs):
+ *     ssthresh = cwnd / 2;  cwnd = ssthresh -> smaller penalty, resume
+ *     directly in congestion avoidance (this is "fast recovery")
+ *
+ * Every cwnd change is logged to logs/cwnd_log.csv for Phase 7 graphing.
  */
 
 static int loss_percent = 0;
+static FILE *cwnd_log = NULL;
+static long log_start_ms = 0;
 
 static int should_drop(void) {
     if (loss_percent <= 0) return 0;
     return (rand() % 100) < loss_percent;
+}
+
+static long now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static void log_cwnd(const char *event, double cwnd, double ssthresh) {
+    if (!cwnd_log) return;
+    fprintf(cwnd_log, "%ld,%s,%.3f,%.3f\n", now_ms() - log_start_ms, event, cwnd, ssthresh);
+    fflush(cwnd_log);
 }
 
 static void send_packet(int sockfd, const rudp_packet_t *pkt,
@@ -47,22 +65,14 @@ static void send_packet(int sockfd, const rudp_packet_t *pkt,
         fprintf(stderr, "rudp_pack failed\n");
         return;
     }
-
     if (allow_drop && should_drop()) {
         printf("  [SIMULATED LOSS] dropped seq=%u\n", pkt->seq_num);
         return;
     }
-
     if (sendto(sockfd, buf, (size_t)len, 0,
                (const struct sockaddr *)addr, addr_len) < 0) {
         perror("sendto failed");
     }
-}
-
-static long now_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
 int main(int argc, char *argv[]) {
@@ -70,6 +80,13 @@ int main(int argc, char *argv[]) {
         loss_percent = atoi(argv[1]);
         printf("Simulated packet loss: %d%%\n", loss_percent);
     }
+
+    system("mkdir -p logs");
+    cwnd_log = fopen("logs/cwnd_log.csv", "w");
+    if (cwnd_log) {
+        fprintf(cwnd_log, "time_ms,event,cwnd,ssthresh\n");
+    }
+    log_start_ms = now_ms();
 
     int sockfd;
     struct sockaddr_in server_addr;
@@ -96,7 +113,7 @@ int main(int argc, char *argv[]) {
     uint32_t client_seq = (uint32_t)rand();
     uint32_t server_seq = 0;
 
-    /* --- Handshake (unchanged from Phase 3) --- */
+    /* --- Handshake (unchanged) --- */
     rudp_packet_t syn;
     memset(&syn, 0, sizeof(syn));
     syn.seq_num = client_seq;
@@ -109,10 +126,7 @@ int main(int argc, char *argv[]) {
 
         rudp_packet_t reply;
         ssize_t n = recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
-        if (n < 0) {
-            printf("Timed out waiting for SYN-ACK, retrying...\n");
-            continue;
-        }
+        if (n < 0) { printf("Timed out, retrying...\n"); continue; }
         if (rudp_unpack(recv_buf, (size_t)n, &reply) != 0) continue;
 
         if ((reply.flags & FLAG_SYN) && (reply.flags & FLAG_ACK) &&
@@ -139,19 +153,22 @@ int main(int argc, char *argv[]) {
 
     printf("Handshake complete. Connection established.\n\n");
 
-    /* --- Build the message to send, split into fixed-size chunks --- */
-    const char *message =
-        "This is a longer test message for RUDP Phase 4. It is deliberately "
-        "split across several packets so the sliding window, retransmission "
-        "timeout, and fast retransmit logic all get exercised during a "
-        "single transfer instead of one line at a time.";
+    /* --- Build a longer message so cwnd has room to actually grow --- */
+    char message[4096];
+    message[0] = '\0';
+    const char *phrase =
+        "RUDP congestion control test data block. AIMD drives cwnd growth. ";
+    while (strlen(message) + strlen(phrase) < sizeof(message) - 1 &&
+           strlen(message) < 2400) {
+        strcat(message, phrase);
+    }
 
     size_t msg_len = strlen(message);
-    size_t chunk_size = 40; /* small on purpose, to force multiple packets */
+    size_t chunk_size = 40;
     int total_packets = (int)((msg_len + chunk_size - 1) / chunk_size);
     if (total_packets > MAX_CHUNKS) total_packets = MAX_CHUNKS;
 
-    uint32_t base_seq = client_seq + 1; /* first DATA packet's seq */
+    uint32_t base_seq = client_seq + 1;
     rudp_packet_t packets[MAX_CHUNKS];
 
     for (int i = 0; i < total_packets; i++) {
@@ -164,31 +181,31 @@ int main(int argc, char *argv[]) {
         memcpy(packets[i].payload, message + offset, len);
     }
 
-    printf("Sending %d packets (message split into %zu-byte chunks)...\n\n",
-           total_packets, chunk_size);
+    printf("Sending %d packets (%zu bytes total) with AIMD congestion control...\n\n",
+           total_packets, msg_len);
 
-    /* --- Sliding window send loop (Go-Back-N) --- */
-    int base = 0;        /* index into packets[] of oldest unacked packet */
-    int next_seq = 0;     /* index of next packet not yet sent */
+    /* --- Congestion-controlled sliding window send loop --- */
+    int base = 0;
+    int next_seq = 0;
     long timer_start = 0;
     int timer_active = 0;
     uint32_t last_ack_seen = 0;
     int dup_ack_count = 0;
 
+    double cwnd = INITIAL_CWND;
+    double ssthresh = INITIAL_SSTHRESH;
+    log_cwnd("START", cwnd, ssthresh);
+
     tv.tv_sec = 0;
-    tv.tv_usec = 50000; /* 50ms poll interval for recvfrom while managing our own timer */
+    tv.tv_usec = 50000;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     while (base < total_packets) {
-        /* Send everything the window currently allows */
-        while (next_seq < total_packets && next_seq < base + WINDOW_SIZE) {
-            printf("SEND seq=%u (window: base=%d next=%d)\n",
-                   packets[next_seq].seq_num, base, next_seq);
+        int window_limit = base + (int)cwnd;
+
+        while (next_seq < total_packets && next_seq < window_limit) {
             send_packet(sockfd, &packets[next_seq], &server_addr, server_len, 1);
-            if (!timer_active) {
-                timer_start = now_ms();
-                timer_active = 1;
-            }
+            if (!timer_active) { timer_start = now_ms(); timer_active = 1; }
             next_seq++;
         }
 
@@ -196,27 +213,43 @@ int main(int argc, char *argv[]) {
         ssize_t n = recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
 
         if (n > 0 && rudp_unpack(recv_buf, (size_t)n, &ack) == 0 && (ack.flags & FLAG_ACK)) {
-            uint32_t acked_seq = ack.ack_num; /* "I have everything before this" */
+            uint32_t acked_seq = ack.ack_num;
             uint32_t base_pkt_seq = packets[base].seq_num;
 
             if (acked_seq > base_pkt_seq) {
-                /* Window slides forward */
-                while (base < total_packets && packets[base].seq_num < acked_seq) {
-                    base++;
+                while (base < total_packets && packets[base].seq_num < acked_seq) base++;
+
+                /* AIMD growth on every new ACK */
+                if (cwnd < ssthresh) {
+                    cwnd += 1.0; /* slow start: exponential-ish growth */
+                } else {
+                    cwnd += 1.0 / cwnd; /* congestion avoidance: linear growth */
                 }
-                printf("  <- ACK %u — window slides to base=%d\n\n", acked_seq, base);
+                if (cwnd > MAX_CWND) cwnd = MAX_CWND;
+
+                printf("  <- ACK %u — base=%d  cwnd=%.2f ssthresh=%.2f (%s)\n",
+                       acked_seq, base, cwnd, ssthresh,
+                       cwnd < ssthresh ? "slow start" : "congestion avoidance");
+                log_cwnd("ACK", cwnd, ssthresh);
+
                 dup_ack_count = 0;
                 last_ack_seen = acked_seq;
                 timer_active = (base < total_packets);
                 if (timer_active) timer_start = now_ms();
 
             } else if (acked_seq == last_ack_seen && acked_seq == base_pkt_seq) {
-                /* Duplicate ACK — receiver still wants `base`, something after it was lost */
                 dup_ack_count++;
-                printf("  <- duplicate ACK %u (count=%d)\n", acked_seq, dup_ack_count);
 
                 if (dup_ack_count >= DUP_ACK_THRESHOLD) {
-                    printf("  !! FAST RETRANSMIT seq=%u\n\n", packets[base].seq_num);
+                    /* Fast retransmit + fast recovery: halve, don't collapse to 1 */
+                    ssthresh = cwnd / 2.0;
+                    if (ssthresh < MIN_CWND) ssthresh = MIN_CWND;
+                    cwnd = ssthresh;
+
+                    printf("  !! FAST RETRANSMIT seq=%u — cwnd HALVED to %.2f (ssthresh=%.2f)\n",
+                           packets[base].seq_num, cwnd, ssthresh);
+                    log_cwnd("FAST_RETRANSMIT", cwnd, ssthresh);
+
                     send_packet(sockfd, &packets[base], &server_addr, server_len, 1);
                     dup_ack_count = 0;
                     timer_start = now_ms();
@@ -226,10 +259,16 @@ int main(int argc, char *argv[]) {
             }
 
         } else {
-            /* No packet arrived this poll interval — check our own RTO timer */
             if (timer_active && (now_ms() - timer_start) >= TIMEOUT_MS) {
-                printf("  !! TIMEOUT — retransmitting window from base=%d to next=%d\n\n",
-                       base, next_seq - 1);
+                /* Timeout: harsher penalty — collapse back to slow start */
+                ssthresh = cwnd / 2.0;
+                if (ssthresh < MIN_CWND) ssthresh = MIN_CWND;
+                cwnd = INITIAL_CWND;
+
+                printf("  !! TIMEOUT — cwnd RESET to %.2f (ssthresh=%.2f), resending from base=%d\n",
+                       cwnd, ssthresh, base);
+                log_cwnd("TIMEOUT", cwnd, ssthresh);
+
                 for (int i = base; i < next_seq; i++) {
                     send_packet(sockfd, &packets[i], &server_addr, server_len, 1);
                 }
@@ -239,7 +278,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("All %d packets delivered and acknowledged.\n\n", total_packets);
+    printf("\nAll %d packets delivered. Final cwnd=%.2f ssthresh=%.2f\n\n",
+           total_packets, cwnd, ssthresh);
+    log_cwnd("DONE", cwnd, ssthresh);
 
     /* --- Teardown --- */
     rudp_packet_t fin;
@@ -251,9 +292,10 @@ int main(int argc, char *argv[]) {
     tv.tv_sec = 2;
     tv.tv_usec = 0;
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL); /* best-effort final ACK */
+    recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0, NULL, NULL);
 
     printf("Connection closed.\n");
+    if (cwnd_log) fclose(cwnd_log);
     close(sockfd);
     return 0;
 }

@@ -16,9 +16,15 @@
 #define FLAG_DATA 0x08
 
 /* Phase 4: reliable delivery tuning */
-#define WINDOW_SIZE 4          /* max unacknowledged packets in flight */
+#define WINDOW_SIZE 4          /* legacy fixed window, unused once congestion control drives cwnd */
 #define TIMEOUT_MS 500         /* retransmission timeout per packet */
 #define DUP_ACK_THRESHOLD 3    /* fast retransmit trigger */
+
+/* Phase 5: congestion control tuning */
+#define INITIAL_CWND 1.0       /* start conservative, like real TCP */
+#define INITIAL_SSTHRESH 16.0  /* slow start ceiling before switching to linear growth */
+#define MIN_CWND 1.0           /* never shrink below one packet in flight */
+#define MAX_CWND 32.0          /* cap so a lossless run doesn't grow unbounded */
 
 /*
  * RUDP packet header, sent on the wire in this exact byte layout:
