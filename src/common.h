@@ -15,6 +15,11 @@
 #define FLAG_FIN  0x04
 #define FLAG_DATA 0x08
 
+/* Phase 4: reliable delivery tuning */
+#define WINDOW_SIZE 4          /* max unacknowledged packets in flight */
+#define TIMEOUT_MS 500         /* retransmission timeout per packet */
+#define DUP_ACK_THRESHOLD 3    /* fast retransmit trigger */
+
 /*
  * RUDP packet header, sent on the wire in this exact byte layout:
  *   seq_num      4 bytes
@@ -40,25 +45,9 @@ typedef struct {
 /* Fixed size of the header on the wire (excludes payload) */
 #define RUDP_HEADER_SIZE 13  /* 4 + 4 + 1 + 2 + 2 */
 
-/*
- * Serializes a rudp_packet_t into a flat byte buffer for sending.
- * buf must be at least RUDP_HEADER_SIZE + pkt->payload_len bytes.
- * Computes and fills in the checksum automatically.
- * Returns the total number of bytes written, or -1 on error.
- */
 int rudp_pack(const rudp_packet_t *pkt, uint8_t *buf, size_t buf_size);
-
-/*
- * Deserializes a flat byte buffer (as received from the network) into
- * a rudp_packet_t. Verifies the checksum.
- * Returns 0 on success, -1 on malformed packet, -2 on checksum mismatch.
- */
 int rudp_unpack(const uint8_t *buf, size_t len, rudp_packet_t *pkt);
-
-/* Simple 16-bit checksum over header fields (minus checksum itself) + payload */
 uint16_t rudp_checksum(const rudp_packet_t *pkt);
-
-/* Debug helper: prints a packet's header fields to stdout */
 void rudp_print_packet(const char *label, const rudp_packet_t *pkt);
 
 #endif /* COMMON_H */
