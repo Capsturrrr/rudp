@@ -27,3 +27,10 @@ $(BIN_DIR)/smart_client: $(SRC_DIR)/smart_client.c $(SRC_DIR)/rl_cc.h $(COMMON_S
 
 smart: $(BIN_DIR)/server $(BIN_DIR)/smart_client
 .PHONY: smart
+
+# RUDP Chat demo (two-way messenger over RUDP packets)
+$(BIN_DIR)/chat: $(SRC_DIR)/chat.c $(COMMON_SRC) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $^
+
+chat: $(BIN_DIR)/chat
+.PHONY: chat

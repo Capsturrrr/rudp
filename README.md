@@ -41,6 +41,20 @@ Result in short: Smart-RUDP matched AIMD on the lossy path and was slower on the
 satellite-like paths, with somewhat fewer retransmissions. Raw results are in `results/`.
 `netem_scenarios.sh` repeats the scenarios with kernel tc/netem (needs root, not used in the report).
 
+## RUDP Chat (demo application)
+
+A two-way messenger built on the RUDP packet format (`src/chat.c`): per-message sequence numbers,
+cumulative ACKs, Go-Back-N window, timeout and fast retransmit, with simulated packet loss.
+
+```bash
+make chat
+./bin/chat 9001 9002 Alice 30     # terminal 1:  my_port peer_port name loss%
+./bin/chat 9002 9001 Bob   30     # terminal 2
+```
+
+Type in either terminal. Lines in grey brackets show what the network lost and what RUDP did about it;
+every message still arrives, complete and in order. Ctrl+D quits and prints statistics.
+
 ## Network design (Cisco Packet Tracer)
 
 Four routers (R1-R4), OSPF area 0, two VLANs with router-on-a-stick, DHCP on R1 and R4, and an
