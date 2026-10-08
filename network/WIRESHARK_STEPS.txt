@@ -5,9 +5,9 @@ A. Open the supplied traces (no setup needed besides the dissector)
       Or run:  wireshark -X lua_script:rudp.lua smart_lossy_aimd.pcap
    2. File > Open smart_lossy_aimd.pcap  (and smart_lossy_rl.pcap).
    3. If packets show as plain UDP: Analyze > Decode As... > UDP port 8888 -> RUDP.
-   4. Filters:  rudp.flags.data == 1      (data segments)
-                rudp.flags.ack == 1       (acknowledgments)
-                rudp.seq == <number>      (every copy of one packet = retransmissions)
+   4. Filters:  smartrudp.flags.data == 1      (data segments)
+                smartrudp.flags.ack == 1       (acknowledgments)
+                smartrudp.seq == <number>      (every copy of one packet = retransmissions)
    5. Statistics > I/O Graphs for rate over time.
    NOTE: these .pcap files are written by smart_client --pcap. They are a receiver-side record of the packets that
    survived the emulated path, wrapped in synthetic IP/UDP headers (192.168.10.10 <-> 192.168.30.10). The 3-way handshake is not included.
