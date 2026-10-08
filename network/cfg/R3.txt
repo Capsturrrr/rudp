@@ -1,0 +1,22 @@
+enable
+configure terminal
+hostname R3
+interface gigabitEthernet0/0
+ ip address 192.168.30.1 255.255.255.0
+ no shutdown
+interface gigabitEthernet0/1
+ ip address 10.0.23.2 255.255.255.252
+ no shutdown
+interface gigabitEthernet0/2
+ ip address 10.0.13.2 255.255.255.252
+ no shutdown
+exit
+router ospf 1
+ router-id 3.3.3.3
+ network 192.168.30.0 0.0.0.255 area 0
+ network 10.0.23.0 0.0.0.3 area 0
+ network 10.0.13.0 0.0.0.3 area 0
+ passive-interface gigabitEthernet0/0
+exit
+end
+copy running-config startup-config

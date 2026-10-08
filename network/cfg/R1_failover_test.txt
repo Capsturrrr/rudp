@@ -1,0 +1,10 @@
+! Convergence test: from PC-Student run  ping -t 192.168.30.10
+configure terminal
+interface gigabitEthernet0/2
+ shutdown
+end
+! ... watch pings recover via R2, run tracert, then restore:
+configure terminal
+interface gigabitEthernet0/2
+ no shutdown
+end

@@ -1,0 +1,24 @@
+enable
+configure terminal
+hostname R4
+interface gigabitEthernet0/0
+ ip address 10.0.24.2 255.255.255.252
+ no shutdown
+interface gigabitEthernet0/1
+ ip address 192.168.40.1 255.255.255.0
+ no shutdown
+exit
+ip dhcp excluded-address 192.168.40.1 192.168.40.10
+ip dhcp pool BRANCH
+ network 192.168.40.0 255.255.255.0
+ default-router 192.168.40.1
+ dns-server 8.8.8.8
+exit
+router ospf 1
+ router-id 4.4.4.4
+ network 192.168.40.0 0.0.0.255 area 0
+ network 10.0.24.0 0.0.0.3 area 0
+ passive-interface gigabitEthernet0/1
+exit
+end
+copy running-config startup-config

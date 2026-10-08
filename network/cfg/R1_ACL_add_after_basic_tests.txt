@@ -1,0 +1,9 @@
+configure terminal
+ip access-list extended BLOCK-STUDENT-TO-STAFF
+ deny ip 192.168.10.0 0.0.0.255 192.168.20.0 0.0.0.255
+ permit ip any any
+ exit
+interface gigabitEthernet0/0.10
+ ip access-group BLOCK-STUDENT-TO-STAFF in
+end
+copy running-config startup-config

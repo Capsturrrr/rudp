@@ -1,0 +1,7 @@
+scenario,mode,n,time_ms_mean,time_sd,retx_mean,timeouts_mean,avg_rtt_ms,goodput_pps
+5g,aimd,6,1436,205,62,0.0,25.1,852
+5g,rl,6,2354,37,34,0.3,23.8,510
+lossy,aimd,6,9300,893,259,4.3,59.8,130
+lossy,rl,6,9138,793,263,5.3,59.5,132
+sat,aimd,6,22036,2862,105,0.5,311.3,55
+sat,rl,6,24272,2319,88,0.2,309.0,50

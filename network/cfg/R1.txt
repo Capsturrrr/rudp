@@ -1,0 +1,40 @@
+enable
+configure terminal
+hostname R1
+interface gigabitEthernet0/0
+ no shutdown
+interface gigabitEthernet0/0.10
+ encapsulation dot1Q 10
+ ip address 192.168.10.1 255.255.255.0
+interface gigabitEthernet0/0.20
+ encapsulation dot1Q 20
+ ip address 192.168.20.1 255.255.255.0
+interface gigabitEthernet0/1
+ ip address 10.0.12.1 255.255.255.252
+ no shutdown
+interface gigabitEthernet0/2
+ ip address 10.0.13.1 255.255.255.252
+ no shutdown
+exit
+ip dhcp excluded-address 192.168.10.1 192.168.10.10
+ip dhcp excluded-address 192.168.20.1 192.168.20.10
+ip dhcp pool VLAN10
+ network 192.168.10.0 255.255.255.0
+ default-router 192.168.10.1
+ dns-server 8.8.8.8
+ip dhcp pool VLAN20
+ network 192.168.20.0 255.255.255.0
+ default-router 192.168.20.1
+ dns-server 8.8.8.8
+exit
+router ospf 1
+ router-id 1.1.1.1
+ network 192.168.10.0 0.0.0.255 area 0
+ network 192.168.20.0 0.0.0.255 area 0
+ network 10.0.12.0 0.0.0.3 area 0
+ network 10.0.13.0 0.0.0.3 area 0
+ passive-interface gigabitEthernet0/0.10
+ passive-interface gigabitEthernet0/0.20
+exit
+end
+copy running-config startup-config

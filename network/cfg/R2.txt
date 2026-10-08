@@ -1,0 +1,23 @@
+! R2 as built (matches the real cabling confirmed with "show cdp neighbors")
+! Gi0/0 -> R1 Gi0/1, Gi0/1 -> R3 Gi0/1, Gi0/2 -> R4 Gi0/0
+enable
+configure terminal
+hostname R2
+interface gigabitEthernet0/0
+ ip address 10.0.12.2 255.255.255.252
+ no shutdown
+interface gigabitEthernet0/1
+ ip address 10.0.23.1 255.255.255.252
+ no shutdown
+interface gigabitEthernet0/2
+ ip address 10.0.24.1 255.255.255.252
+ no shutdown
+exit
+router ospf 1
+ router-id 2.2.2.2
+ network 10.0.12.0 0.0.0.3 area 0
+ network 10.0.23.0 0.0.0.3 area 0
+ network 10.0.24.0 0.0.0.3 area 0
+exit
+end
+copy running-config startup-config

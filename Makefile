@@ -20,3 +20,10 @@ clean:
 	rm -rf $(BIN_DIR)
 
 .PHONY: all clean
+
+# Smart-RUDP (RL congestion control) -- needs -lm; server is built per port
+$(BIN_DIR)/smart_client: $(SRC_DIR)/smart_client.c $(SRC_DIR)/rl_cc.h $(COMMON_SRC) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -o $@ $(SRC_DIR)/smart_client.c $(COMMON_SRC) -lm
+
+smart: $(BIN_DIR)/server $(BIN_DIR)/smart_client
+.PHONY: smart

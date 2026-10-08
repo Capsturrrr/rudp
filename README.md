@@ -18,8 +18,41 @@ sliding window flow control, and AIMD-based congestion control.
 - [x] Phase 6 — Real network emulation (tc/netem) + Wireshark packet capture
 - [x] Phase 7 — Benchmarking + visualization (cwnd graphs, loss-vs-duration graphs)
 
-Still to do: Cisco Packet Tracer topology (separate deliverable, see `docs/`), case study +
-video submission (due 21st Oct), final written report.
+Extensions (done):
+
+- [x] **Smart-RUDP** — tabular Q-learning congestion controller compared with AIMD on three emulated paths (`src/smart_client.c`, `src/rl_cc.h`)
+- [x] **Network design** — four-router OSPF network in Cisco Packet Tracer: VLANs, DHCP, ACL, link failover tested (`network/`)
+- [x] **Wireshark** — Lua dissector for the RUDP header and exported traces (`network/rudp.lua`, `network/*.pcap`)
+- [x] Final report and slides in `docs/final/`
+
+Still to do: case study + video submission (due 21st Oct).
+
+## Smart-RUDP (learning-based congestion control)
+
+```bash
+make smart                      # builds bin/server and bin/smart_client
+./run_experiments.sh            # trains 40 episodes, evaluates 6 runs per scenario
+python3 analyze.py              # writes smart_graphs/*.png and summary.csv
+```
+
+Both modes (`--mode aimd|rl`) share the same reliability code; only the window policy differs.
+The path (delay, jitter, loss, bottleneck rate, queue) is emulated inside the client.
+Result in short: Smart-RUDP matched AIMD on the lossy path and was slower on the 5G-like and
+satellite-like paths, with somewhat fewer retransmissions. Raw results are in `results/`.
+`netem_scenarios.sh` repeats the scenarios with kernel tc/netem (needs root, not used in the report).
+
+## Network design (Cisco Packet Tracer)
+
+Four routers (R1-R4), OSPF area 0, two VLANs with router-on-a-stick, DHCP on R1 and R4, and an
+extended ACL blocking students from staff. Device configs are in `network/cfg/`; the diagram is
+`network/topology_final.png`. Tested: OSPF neighbours, routes (metric 2 to the server LAN, 3 to the
+branch LAN), tracert, ACL block, and failover (70 of 71 pings during a link shutdown).
+Packet Tracer cannot run the C programs, so the protocol and the network are validated separately.
+
+## Wireshark
+
+`network/rudp.lua` is a dissector (`wireshark -X lua_script:network/rudp.lua`). See
+`network/WIRESHARK_STEPS.txt`. `network/smart_lossy_*.pcap` are traces exported by the client (`--pcap`).
 
 ## Setup (one-time, per machine)
 

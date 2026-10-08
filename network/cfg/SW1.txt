@@ -1,0 +1,18 @@
+enable
+configure terminal
+hostname SW1
+vlan 10
+ name STUDENTS
+vlan 20
+ name STAFF
+exit
+interface fastEthernet0/1
+ switchport mode trunk
+interface fastEthernet0/2
+ switchport mode access
+ switchport access vlan 10
+interface fastEthernet0/3
+ switchport mode access
+ switchport access vlan 20
+end
+copy running-config startup-config
