@@ -9,7 +9,7 @@ from cc import Controller
 TIMEOUT = 0.3
 TICK = 0.01
 
-def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=120.0):
+def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=120.0, jitter=0.0):
     rng = random.Random(seed)
     ev, cnt = [], 0
     def push(t, kind, data=None):
@@ -34,11 +34,11 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=120.0):
             if (start - t) * rate > queue: return       # drop-tail queue full
             link_free = start + 1.0 / rate
             at = link_free
-        push(at + delay, "data", seq)
+        push(at + delay + rng.uniform(0, jitter), "data", seq)
 
     def tx_ack(ackn):
         if rng.random() < loss: return
-        push(t + delay, "ack", ackn)
+        push(t + delay + rng.uniform(0, jitter), "ack", ackn)
 
     def pump():
         nonlocal nxt, pending
