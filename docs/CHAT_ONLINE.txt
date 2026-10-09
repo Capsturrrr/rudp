@@ -25,3 +25,8 @@ WEB VERSION (browser UI, same protocol, talks to ./bin/chat or another web copy)
    python3 web/rudp_web.py --udp 9001 --peer FRIEND_IP:9001 --name Harsh --http 8080
    open http://localhost:8080
    Right panel: live packet-loss slider, sent/lost/resent counters, in-flight window, protocol log.
+
+WINDOW CONTROLLER (browser version only)
+   Dropdown: Fixed window (8) / AIMD / Smart-RUDP (Q-learning, loads results/q_lossy.txt, keeps learning).
+   "Send 60 test messages" times delivery. For a slow lossy path add:  --loss 10 --delay 40
+   (Smart-RUDP did not beat the simple controllers in our tests, same as the report.)
