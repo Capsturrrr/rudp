@@ -1,0 +1,81 @@
+"""
+Discrete-event simulator of the chat transport (Go-Back-N, cumulative ACKs, 3-dup-ACK fast retransmit,
+300 ms timeout) over a path with one-way delay, random loss, and an optional bottleneck queue.
+Used to train and evaluate the window controllers on many paths quickly.
+"""
+import heapq, random
+from cc import Controller
+
+TIMEOUT = 0.3
+TICK = 0.01
+
+def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=120.0):
+    rng = random.Random(seed)
+    ev, cnt = [], 0
+    def push(t, kind, data=None):
+        nonlocal cnt
+        cnt += 1; heapq.heappush(ev, (t, cnt, kind, data))
+    t = 0.0
+    base = nxt = 0
+    sent_at, first_sent, retxed = {}, {}, set()
+    expected = 0
+    dups = 0
+    link_free = 0.0      # bottleneck serialization for data direction
+    ctrl.reset()
+    pending = n_msgs
+
+    def tx_data(seq, retx):
+        nonlocal link_free
+        if not retx: ctrl.on_new_packet()
+        if rng.random() < loss: return
+        at = t
+        if rate:
+            start = max(t, link_free)
+            if (start - t) * rate > queue: return       # drop-tail queue full
+            link_free = start + 1.0 / rate
+            at = link_free
+        push(at + delay, "data", seq)
+
+    def tx_ack(ackn):
+        if rng.random() < loss: return
+        push(t + delay, "ack", ackn)
+
+    def pump():
+        nonlocal nxt, pending
+        while pending and nxt - base < ctrl.window():
+            first_sent[nxt] = t; sent_at[nxt] = t
+            tx_data(nxt, False); nxt += 1; pending -= 1
+
+    def resend():
+        for q in range(base, nxt):
+            retxed.add(q); sent_at[q] = t; tx_data(q, True)
+
+    push(0.0, "tick")
+    pump()
+    while ev:
+        t, _, kind, data = heapq.heappop(ev)
+        if t > max_t: return max_t
+        if kind == "data":
+            if data == expected: expected += 1
+            tx_ack(expected)
+        elif kind == "ack":
+            if base < data <= nxt:
+                samples = []
+                for q in range(base, data):
+                    t0 = first_sent.pop(q, None)
+                    if t0 is not None and q not in retxed: samples.append(t - t0)
+                    retxed.discard(q)
+                ctrl.on_ack(data - base, samples)
+                base, dups = data, 0
+                if base >= n_msgs: return t
+            elif data == base and base < nxt:
+                dups += 1
+                if dups == 3:
+                    ctrl.on_loss("dup"); resend(); dups = 0
+        elif kind == "tick":
+            if base < nxt and t - sent_at[base] > TIMEOUT:
+                ctrl.on_loss("timeout"); resend()
+            ctrl.step(t, pending)
+            pump()
+            push(t + TICK, "tick")
+    return max_t

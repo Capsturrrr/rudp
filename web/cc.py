@@ -1,0 +1,119 @@
+"""
+Window controllers shared by the web chat gateway and the offline trainer/simulator.
+Modes: fixed (8), aimd (rule), smart (tabular Q-learning, same 80 states / 5 actions as src/rl_cc.h).
+All time is passed in, so the same code runs in real time and in a simulator.
+"""
+import math, random
+
+RL_MULT = [0.5, 0.85, 1.0, 1.15, 1.5]
+CWND_MAX = 32.0
+INIT_CWND = 10.0          # RFC 6928 initial window; used by BOTH aimd and smart for a fair comparison
+FIXED_WINDOW = 8
+
+def rl_state(rtt_ratio, loss, cwnd):
+    rb = 0 if rtt_ratio < 1.15 else 1 if rtt_ratio < 1.5 else 2 if rtt_ratio < 2.2 else 3
+    lb = 0 if loss <= 0 else 1 if loss < 0.03 else 2 if loss < 0.10 else 3
+    cb = 0 if cwnd < 4 else 1 if cwnd < 12 else 2 if cwnd < 32 else 3 if cwnd < 64 else 4
+    return (rb * 4 + lb) * 5 + cb
+
+def prior_q():
+    q = []
+    for s in range(80):
+        cb_loss, cb_rtt = (s // 5) % 4, (s // 5) // 4
+        d = 1.0 if (cb_rtt <= 1 and cb_loss <= 1) else -1.0 if (cb_rtt >= 2 or cb_loss >= 2) else 0.0
+        q.append([0.25 * d * math.log(m) / math.log(1.5) for m in RL_MULT])
+    return q
+
+def load_q(path):
+    try:
+        rows = [list(map(float, l.split())) for l in open(path).read().strip().splitlines()[1:]]
+        if len(rows) == 80 and all(len(r) == 5 for r in rows): return rows
+    except Exception: pass
+    return None
+
+def save_q(q, path):
+    with open(path, "w") as f:
+        f.write("0\n")
+        for r in q: f.write(" ".join(f"{v:.6f}" for v in r) + " \n")
+
+LAG = 1
+MASK = True
+
+class Controller:
+    def __init__(self, mode="fixed", q=None, alpha=0.15, gamma=0.9, eps=0.0, rng=None):
+        self.q, self.alpha, self.gamma, self.eps = q, alpha, gamma, eps
+        self.rng = rng or random.Random()
+        self.learn = True
+        self.reset(mode)
+
+    def reset(self, mode=None):
+        if mode: self.mode = mode
+        self.cwnd = float(FIXED_WINDOW) if self.mode == "fixed" else INIT_CWND
+        self.ssthresh = 16.0
+        self.srtt = self.min_rtt = None
+        self.iv_start = None
+        self.iv_new = self.iv_lossev = self.iv_acked = 0
+        self.iv_rtts = []
+        self.last_sa = None
+        self.hist = []
+        self.last_action = "-"
+        self.note = None
+
+    def set_mode(self, m):
+        if m == self.mode: return
+        self.reset(m)
+
+    def window(self):
+        return FIXED_WINDOW if self.mode == "fixed" else max(1, int(self.cwnd))
+
+    # ---- events from the transport ----
+    def on_new_packet(self): self.iv_new += 1
+
+    def on_ack(self, n_acked, rtt_samples):
+        self.iv_acked += n_acked
+        for r in rtt_samples:
+            self.iv_rtts.append(r)
+            self.srtt = r if self.srtt is None else 0.875 * self.srtt + 0.125 * r
+            self.min_rtt = r if self.min_rtt is None else min(self.min_rtt, r)
+        if self.mode == "aimd":
+            for _ in range(n_acked):
+                self.cwnd = min(CWND_MAX, self.cwnd + (1.0 if self.cwnd < self.ssthresh else 1.0 / self.cwnd))
+
+    def on_loss(self, kind):
+        self.iv_lossev += 1
+        if self.mode == "aimd":
+            self.ssthresh = max(2.0, self.cwnd / 2)
+            self.cwnd = 1.0 if kind == "timeout" else self.ssthresh
+
+    # ---- smart controller: decide about once per RTT ----
+    def step(self, now, backlog):
+        if self.iv_start is None: self.iv_start = now
+        interval = max(0.1, min(0.5, self.srtt or 0.5))
+        if now - self.iv_start < interval: return
+        dur = now - self.iv_start
+        new, lossev, acked, rtts = self.iv_new, self.iv_lossev, self.iv_acked, self.iv_rtts
+        self.iv_start, self.iv_new, self.iv_lossev, self.iv_acked, self.iv_rtts = now, 0, 0, 0, []
+        if self.mode != "smart" or self.q is None or (new == 0 and acked == 0 and lossev == 0): return
+        base = self.min_rtt or 0.05
+        cur = (sum(rtts) / len(rtts)) if rtts else (self.srtt or base)
+        ratio = max(1.0, cur / base)
+        loss = min(1.0, lossev / max(1, new))
+        st = rl_state(ratio, loss, self.cwnd)
+        if self.learn and len(self.hist) >= LAG:
+            # acks seen now were produced by the window chosen two decisions ago (one RTT of lag)
+            peak = max(1.0, CWND_MAX * dur / max(base, 0.02))
+            thr = min(1.0, acked / peak)
+            r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
+            ps, pa = self.hist[-LAG]
+            ns = self.hist[-LAG + 1][0] if LAG > 1 else st
+            self.q[ps][pa] += self.alpha * (r + self.gamma * max(self.q[ns]) - self.q[ps][pa])
+        allowed = range(5)
+        if MASK and loss == 0 and ratio < 1.5:
+            allowed = (2, 3, 4)          # no congestion signal: never shrink the window
+        if self.eps > 0 and self.rng.random() < self.eps: a = self.rng.choice(list(allowed))
+        else: a = max(allowed, key=lambda k: self.q[st][k])
+        self.last_sa = (st, a)
+        self.hist = (self.hist + [(st, a)])[-2:]
+        self.cwnd = max(2.0, min(CWND_MAX, self.cwnd * RL_MULT[a]))
+        self.last_action = f"x{RL_MULT[a]}"
+        self.note = f"smart: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {self.cwnd:.1f} ({self.last_action})"

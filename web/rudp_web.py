@@ -10,30 +10,15 @@ It interoperates with ./bin/chat on the other side.
   then open http://localhost:8080
 Standard library only.
 """
-import argparse, collections, heapq, json, math, os, random, select, socket, struct, threading, time
+import argparse, collections, heapq, json, os, select, socket, struct, sys, threading, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cc import Controller, load_q
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 SYN, ACK, FIN, DATA = 1, 2, 4, 8
 WINDOW, TIMEOUT_MS, DUP = 8, 300, 3
-RL_MULT = [0.5, 0.85, 1.0, 1.15, 1.5]
-CWND_MAX = 32.0
-INTERVAL = 0.5
 
-
-def rl_state(rtt_ratio, loss, cwnd):
-    rb = 0 if rtt_ratio < 1.15 else 1 if rtt_ratio < 1.5 else 2 if rtt_ratio < 2.2 else 3
-    lb = 0 if loss <= 0 else 1 if loss < 0.03 else 2 if loss < 0.10 else 3
-    cb = 0 if cwnd < 4 else 1 if cwnd < 12 else 2 if cwnd < 32 else 3 if cwnd < 64 else 4
-    return (rb * 4 + lb) * 5 + cb
-
-
-def load_q(path):
-    try:
-        rows = [list(map(float, l.split())) for l in open(path).read().strip().splitlines()[1:]]
-        if len(rows) == 80 and all(len(r) == 5 for r in rows): return rows
-    except Exception: pass
-    return None
 
 def checksum(seq, ack, flags, payload):
     s = sum(struct.pack(">II", seq, ack)) + flags + sum(struct.pack(">H", len(payload))) + sum(payload)
@@ -50,6 +35,7 @@ def unpack(b):
     if len(p) != n or chk != checksum(seq, ack, flags, p): return None
     return seq, ack, flags, p
 
+
 class Chat:
     def __init__(s, udp, peer, name, loss, delay=0):
         s.name, s.loss, s.lock = name, loss, threading.Lock()
@@ -63,38 +49,28 @@ class Chat:
         s.msgs, s.log = [], []
         s.stats = dict(sent=0, dropped=0, retx=0)
         s.import_random = __import__("random")
-        s.mode = "fixed"                     # fixed | aimd | smart
-        s.cwnd, s.ssthresh = 8.0, 16.0
+        here = os.path.dirname(os.path.abspath(__file__))
+        q = load_q(os.path.join(here, "..", "results", "q_chat.txt")) or load_q(os.path.join(here, "..", "results", "q_lossy.txt"))
+        s.cc = Controller("fixed", q)
+        s.agent_ok = q is not None
         s.first_sent, s.retxed = {}, set()
-        s.srtt = s.min_rtt = None
         s.pending = collections.deque()
         s.bulk = None                        # dict(total, start, done_at, mode)
-        s.q = load_q(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "q_lossy.txt"))
-        s.agent_ok = s.q is not None
-        s.last_sa = None
-        s.iv_start = time.time(); s.iv_sent = s.iv_retx = s.iv_acked = s.iv_new = s.iv_lossev = 0; s.iv_rtts = []
-        s.last_action = "-"
-
 
     def note(s, text, kind="info"):
         s.log.append(dict(t=time.strftime("%H:%M:%S"), kind=kind, text=text))
         s.log = s.log[-200:]
 
     def window(s):
-        return WINDOW if s.mode == "fixed" else max(1, int(s.cwnd))
+        return s.cc.window()
 
     def set_mode(s, m):
         if m not in ("fixed", "aimd", "smart"): return
-        s.mode = m
-        s.cwnd = 8.0 if m == "fixed" else max(1.0, min(s.cwnd, CWND_MAX))
-        if m == "aimd": s.ssthresh = 16.0
+        s.cc.set_mode(m)
         s.note(f"window controller: {m}", "ok")
 
     def tx(s, flags, seq, ack, payload=b"", retx=False):
-        if flags & DATA:
-            s.iv_sent += 1
-            if retx: s.iv_retx += 1
-            else: s.iv_new += 1
+        if flags & DATA and not retx: s.cc.on_new_packet()
         s.stats["sent"] += 1
         if retx: s.stats["retx"] += 1
         if s.loss > 0 and s.import_random.random() * 100 < s.loss:
@@ -123,10 +99,10 @@ class Chat:
 
     def bulk_start(s, n=60):
         with s.lock:
-            s.bulk = dict(total=n, start=time.time(), done_at=None, mode=s.mode, first=s.next + len(s.pending))
+            s.bulk = dict(total=n, start=time.time(), done_at=None, mode=s.cc.mode, first=s.next + len(s.pending))
             for i in range(n):
                 s.pending.append(f"{s.name}: test message {i + 1}/{n}".encode())
-            s.note(f"stress test: {n} messages, controller = {s.mode}", "ok")
+            s.note(f"stress test: {n} messages, controller = {s.cc.mode}", "ok")
             s.pump()
 
     def pump(s):
@@ -140,55 +116,24 @@ class Chat:
 
     def on_acked(s, old_base, new_base):
         now = time.time()
+        samples = []
         for q in range(old_base, new_base):
-            s.iv_acked += 1
             t0 = s.first_sent.pop(q, None)
             if t0 is not None and q not in s.retxed:       # Karn: skip retransmitted samples
-                r = now - t0
-                s.iv_rtts.append(r)
-                s.srtt = r if s.srtt is None else 0.875 * s.srtt + 0.125 * r
-                s.min_rtt = r if s.min_rtt is None else min(s.min_rtt, r)
+                samples.append(now - t0)
             s.retxed.discard(q)
-            if s.mode == "aimd":
-                s.cwnd = min(CWND_MAX, s.cwnd + (1.0 if s.cwnd < s.ssthresh else 1.0 / s.cwnd))
+        s.cc.on_ack(new_base - old_base, samples)
         if s.bulk and s.bulk["done_at"] is None and new_base >= s.bulk["first"] + s.bulk["total"]:
             s.bulk["done_at"] = time.time()
             s.note(f"stress test done: {s.bulk['total']} messages in {s.bulk['done_at'] - s.bulk['start']:.1f} s ({s.bulk['mode']})", "ok")
 
     def loss_event(s, kind):
-        s.iv_lossev += 1
-        if s.mode == "aimd":
-            if kind == "timeout": s.ssthresh = max(2.0, s.cwnd / 2); s.cwnd = 1.0
-            else: s.ssthresh = max(2.0, s.cwnd / 2); s.cwnd = s.ssthresh
+        s.cc.on_loss(kind)
 
     def rl_step(s):
-        """Once per interval (about one RTT): observe, learn from the last action, choose the next."""
-        now = time.time()
-        interval = max(0.1, min(0.5, s.srtt or 0.5))
-        if now - s.iv_start < interval: return
-        dur = now - s.iv_start
-        new, lossev, acked = s.iv_new, s.iv_lossev, s.iv_acked
-        rtts = s.iv_rtts
-        s.iv_start, s.iv_sent, s.iv_retx, s.iv_acked, s.iv_rtts = now, 0, 0, 0, []
-        s.iv_new = s.iv_lossev = 0
-        if s.mode != "smart" or not s.agent_ok or (new == 0 and acked == 0 and lossev == 0): return
-        base_rtt = s.min_rtt or 0.05
-        cur = (sum(rtts) / len(rtts)) if rtts else (s.srtt or base_rtt)
-        ratio = max(1.0, cur / base_rtt)
-        loss = min(1.0, lossev / max(1, new))        # loss events per new packet (Go-Back-N inflates raw resend counts)
-        st = rl_state(ratio, loss, s.cwnd)
-        if s.last_sa is not None:
-            full = max(1.0, s.cwnd * dur / max(base_rtt, 0.02))   # acks a full window would produce
-            thr = min(1.0, acked / full)
-            r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
-            ps, pa = s.last_sa
-            s.q[ps][pa] += 0.15 * (r + 0.9 * max(s.q[st]) - s.q[ps][pa])
-        a = max(range(5), key=lambda k: s.q[st][k])
-        if loss == 0 and ratio < 1.15 and s.pending: a = max(a, 3)   # backlog on a clean path: never shrink
-        s.last_sa = (st, a)
-        s.cwnd = max(2.0, min(CWND_MAX, s.cwnd * RL_MULT[a]))
-        s.last_action = f"x{RL_MULT[a]}"
-        s.note(f"smart: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {s.cwnd:.1f} ({s.last_action})", "info")
+        s.cc.step(time.time(), len(s.pending))
+        if s.cc.note:
+            s.note(s.cc.note, "info"); s.cc.note = None
 
     def handle(s, raw, src):
         pk = unpack(raw)
@@ -240,7 +185,7 @@ class Chat:
         with s.lock:
             ms = [dict(m, delivered=(m["mine"] and m["seq"] < s.base)) for m in s.msgs]
             return dict(name=s.name, peer=f"{s.peer[0]}:{s.peer[1]}", connected=s.heard, loss=s.loss,
-                        base=s.base, next=s.next, expected=s.expected, window=s.window(), mode=s.mode, cwnd=round(s.cwnd, 1), queued=len(s.pending), agent_ok=s.agent_ok, last_action=s.last_action, bulk=(dict(s.bulk, elapsed=round((s.bulk['done_at'] or time.time()) - s.bulk['start'], 1), done=s.bulk['done_at'] is not None) if s.bulk else None),
+                        base=s.base, next=s.next, expected=s.expected, window=s.window(), mode=s.cc.mode, cwnd=round(s.cc.cwnd, 1), queued=len(s.pending), agent_ok=s.agent_ok, last_action=s.cc.last_action, bulk=(dict(s.bulk, elapsed=round((s.bulk['done_at'] or time.time()) - s.bulk['start'], 1), done=s.bulk['done_at'] is not None) if s.bulk else None),
                         stats=dict(s.stats), msgs=ms, log=s.log[-60:])
 
 

@@ -30,3 +30,6 @@ WINDOW CONTROLLER (browser version only)
    Dropdown: Fixed window (8) / AIMD / Smart-RUDP (Q-learning, loads results/q_lossy.txt, keeps learning).
    "Send 60 test messages" times delivery. For a slow lossy path add:  --loss 10 --delay 40
    (Smart-RUDP did not beat the simple controllers in our tests, same as the report.)
+
+RETRAIN / EVALUATE THE CHAT AGENT
+   python3 web/train.py   (about 5 s; writes results/q_chat.txt and prints the held-out comparison table)
