@@ -9,7 +9,7 @@ from cc import Controller
 TIMEOUT = 0.3
 TICK = 0.01
 
-def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, jitter=0.0):
+def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, jitter=0.0, sack=False):
     rng = random.Random(seed)
     ev, cnt = [], 0
     def push(t, kind, data=None):
@@ -19,6 +19,7 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
     base = nxt = 0
     sent_at, first_sent, retxed = {}, {}, set()
     expected = 0
+    rcvd, sacked = set(), set()
     dups = 0
     link_free = 0.0      # bottleneck serialization for data direction
     ctrl.reset()
@@ -38,7 +39,7 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
 
     def tx_ack(ackn):
         if rng.random() < loss: return
-        push(t + delay + rng.uniform(0, jitter), "ack", ackn)
+        push(t + delay + rng.uniform(0, jitter), "ack", (ackn, frozenset(rcvd)) if sack else ackn)
 
     def pump():
         nonlocal nxt, pending
@@ -46,8 +47,10 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
             first_sent[nxt] = t; sent_at[nxt] = t
             tx_data(nxt, False); nxt += 1; pending -= 1
 
-    def resend():
-        for q in range(base, nxt):
+    def resend(dupack=False):
+        hi = (max(sacked) if sacked else base) if (sack and dupack) else nxt
+        for q in range(base, max(hi, base + 1) if (sack and dupack) else nxt):
+            if sack and q in sacked: continue
             retxed.add(q); sent_at[q] = t; tx_data(q, True)
 
     push(0.0, "tick")
@@ -56,9 +59,14 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
         t, _, kind, data = heapq.heappop(ev)
         if t > max_t: return max_t
         if kind == "data":
-            if data == expected: expected += 1
+            if sack:
+                rcvd.add(data)
+                while expected in rcvd: expected += 1
+                rcvd.intersection_update({x for x in rcvd if x >= expected})
+            elif data == expected: expected += 1
             tx_ack(expected)
         elif kind == "ack":
+            if sack: data, sk = data; sacked.update(sk)
             if base < data <= nxt:
                 samples = []
                 for q in range(base, data):
@@ -67,11 +75,12 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
                     retxed.discard(q)
                 ctrl.on_ack(data - base, samples)
                 base, dups = data, 0
+                sacked.difference_update({x for x in sacked if x < base})
                 if base >= n_msgs: return t
             elif data == base and base < nxt:
                 dups += 1
                 if dups == 3:
-                    ctrl.on_loss("dup"); resend(); dups = 0
+                    ctrl.on_loss("dup"); resend(True); dups = 0
         elif kind == "tick":
             if base < nxt and t - sent_at[base] > TIMEOUT:
                 ctrl.on_loss("timeout"); resend()
