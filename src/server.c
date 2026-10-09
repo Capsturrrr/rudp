@@ -59,6 +59,9 @@ int main(void) {
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_len = sizeof(client_addr);
     uint8_t recv_buf[BUFFER_SIZE];
+#ifdef RUDP_SACK
+    uint64_t sack_bits = 0; static uint8_t sack_buf[64][MAX_PAYLOAD]; static uint16_t sack_len[64];
+#endif
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
@@ -133,6 +136,46 @@ int main(void) {
                    state_name(state), expected_seq);
 
         } else if ((pkt.flags & FLAG_DATA) && state == STATE_ESTABLISHED) {
+#ifdef RUDP_SACK
+            /* Selective acknowledgment build: buffer out-of-order packets (64-packet window) and report them
+               in an 8-byte bitmap carried in every ACK: bit j set means seq expected_seq+j was received. */
+            if (pkt.seq_num == expected_seq) {
+                if (reassembled_len + pkt.payload_len < sizeof(reassembled)) {
+                    memcpy(reassembled + reassembled_len, pkt.payload, pkt.payload_len);
+                    reassembled_len += pkt.payload_len;
+                }
+                printf("ACCEPTED seq=%u (%u bytes)\n", pkt.seq_num, pkt.payload_len);
+                expected_seq++; sack_bits >>= 1;
+                while (sack_bits & 1) {                 /* buffered packets that are now in order */
+                    int slot = (int)(expected_seq % 64);
+                    if (reassembled_len + sack_len[slot] < sizeof(reassembled)) {
+                        memcpy(reassembled + reassembled_len, sack_buf[slot], sack_len[slot]);
+                        reassembled_len += sack_len[slot];
+                    }
+                    expected_seq++; sack_bits >>= 1;
+                }
+            } else if (pkt.seq_num > expected_seq && pkt.seq_num - expected_seq < 64) {
+                int slot = (int)(pkt.seq_num % 64);
+                if (!(sack_bits & (1ULL << (pkt.seq_num - expected_seq)))) {
+                    memcpy(sack_buf[slot], pkt.payload, pkt.payload_len); sack_len[slot] = pkt.payload_len;
+                    sack_bits |= 1ULL << (pkt.seq_num - expected_seq);
+                }
+                printf("BUFFERED seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
+            } else {
+                printf("DUPLICATE seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
+            }
+            {
+                rudp_packet_t ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq_num = server_seq;
+                ack.ack_num = expected_seq;
+                ack.flags = FLAG_ACK;
+                ack.payload_len = 8;
+                for (int k = 0; k < 8; k++) ack.payload[k] = (uint8_t)(sack_bits >> (8 * (7 - k)));
+                send_packet(sockfd, &ack, &client_addr, client_len);
+                printf("  -> ACK %u + sack bitmap\n\n", expected_seq);
+            }
+#else
             if (pkt.seq_num == expected_seq) {
                 /* In-order — accept and deliver */
                 if (reassembled_len + pkt.payload_len < sizeof(reassembled)) {
@@ -164,6 +207,7 @@ int main(void) {
                 send_packet(sockfd, &ack, &client_addr, client_len);
                 printf("  -> duplicate ACK %u\n\n", expected_seq);
             }
+#endif
 
         } else if ((pkt.flags & FLAG_FIN) && state == STATE_ESTABLISHED) {
             rudp_packet_t ack;

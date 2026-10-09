@@ -35,11 +35,28 @@ make smart                      # builds bin/server and bin/smart_client
 python3 analyze.py              # writes smart_graphs/*.png and summary.csv
 ```
 
-Both modes (`--mode aimd|rl`) share the same reliability code; only the window policy differs.
+Modes: `--mode aimd|rl|rl2|deep`. They share the same reliability code; only the window policy differs.
+`rl` is the original table agent, `rl2` is the chat-style table agent (no-shrink rule, window cap 32) and
+`deep` is a small neural network (`src/deep_cc.h`, weights in `results/dqn_chat.txt`, trained by `web/train_deep.py`).
+`--init N` sets the initial window (the chat-style modes use 10; give AIMD `--init 10` for a fair comparison).
+Selective acknowledgments: build `make sack`, run the client with `--sack 1` against `bin/server_sack`.
+`--reorder 1` lets jitter reorder packets on the emulated path.
 The path (delay, jitter, loss, bottleneck rate, queue) is emulated inside the client.
 Result in short: Smart-RUDP matched AIMD on the lossy path and was slower on the 5G-like and
 satellite-like paths, with somewhat fewer retransmissions. Raw results are in `results/`.
 `netem_scenarios.sh` repeats the scenarios with kernel tc/netem (needs root, not used in the report).
+
+## Tests
+
+```bash
+make test        # wire format, end-to-end delivery over UDP, all controller modes, SACK, simulator
+```
+
+## More experiments (simulated, Python)
+
+`python3 web/stress.py` (48 unseen paths), `web/baselines.py` (plain UDP and a TCP model), `web/sack_test.py`,
+`web/reorder_test.py`, `web/train_deep.py`. Repeated C runs with confidence intervals: `eval_ci.sh`, `eval_ci2.sh`,
+`eval_ci3.sh` with `ci_summary*.py`. Real kernel TCP/UDP on netem (Linux, root): `netem_baselines.sh`.
 
 ## RUDP Chat (demo application)
 

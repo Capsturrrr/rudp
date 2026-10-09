@@ -107,10 +107,19 @@ web/cc.py</pre></div></li>
 <li><p>Confidence intervals for the C experiments (the full run takes about 30 minutes; show the saved results instead).</p><div class="cmd"><pre>python3 ci_summary.py</pre></div></li>
 <li><p>Real TCP, UDP and RUDP on netem (Linux only, needs sudo).</p><div class="cmd"><pre>sudo bash netem_baselines.sh lossy</pre></div></li>
 </ol><div class="warn">The TCP result is a model, not kernel TCP. Say so before she asks.</div></section>
+<section id="d9"><h2>9. Neural agent and tests in C</h2><p class="goal">The neural agent in the real transport, compared with AIMD, and the test suite.</p><ol>
+<li><p>Build and export the network weights.</p><div class="cmd"><pre>make smart sack
+python3 web/export_dqn.py</pre></div></li>
+<li><p>Terminal 1: server on its own port.</p><div class="cmd"><pre>gcc -DSERVER_PORT=9401 -o bin/server_9401 src/server.c src/common.c
+./bin/server_9401</pre></div></li>
+<li><p>Terminal 2: AIMD, then the neural agent, on the lossy path (same start window).</p><div class="cmd"><pre>./bin/smart_client --mode aimd --init 10 --port 9401 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --scenario lossy
+./bin/smart_client --mode deep --init 10 --dfile results/dqn_chat.txt --port 9401 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --scenario lossy</pre></div><p>The fourth number in the RESULT line is the time in ms. Expect about 9 s for AIMD and 6 to 7 s for the neural agent; single runs vary, the 15-run table is in the report.</p></li>
+<li><p>Run every test.</p><div class="cmd"><pre>make test</pre></div><p>It ends with ALL TESTS PASSED.</p></li>
+</ol><div class="warn">One run is an example. The claim rests on 15 runs per scenario with 95% intervals (Table 8c).</div></section>
 <button class="tt" id="theme" type="button">Toggle theme</button>
 </div>
 <script>
-const names=['0 Setup','1 Base RUDP','2 AIMD vs Smart','3 Terminal chat','4 Web chat','5 Phone','6 Network','7 AI agent','8 Evidence'];
+const names=['0 Setup','1 Base RUDP','2 AIMD vs Smart','3 Terminal chat','4 Web chat','5 Phone','6 Network','7 AI agent','8 Evidence','9 C agent + tests'];
 const nav=document.getElementById('tabs');
 function show(i){document.querySelectorAll('section').forEach((s,k)=>s.classList.toggle('on',k===i));nav.querySelectorAll('button').forEach((b,k)=>b.setAttribute('aria-selected',k===i));try{localStorage.setItem('rb',i)}catch(e){}}
 names.forEach((n,i)=>{const b=document.createElement('button');b.type='button';b.textContent=n;b.setAttribute('role','tab');b.onclick=()=>show(i);nav.appendChild(b)});

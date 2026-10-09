@@ -1,0 +1,26 @@
+#!/bin/bash
+# Full test run: wire format, end-to-end delivery over real UDP (clean and lossy), Smart-RUDP modes, SACK, simulator.
+cd "$(dirname "$0")/.."; fail=0
+step() { echo; echo "== $1"; }
+step "build"; make all smart sack chat >/dev/null 2>&1 && echo ok || { echo "build FAILED"; exit 1; }
+step "wire format"; gcc -Wall -o bin/test_rudp tests/test_rudp.c src/common.c && ./bin/test_rudp || fail=1
+step "end to end: client and server, 0% and 20% simulated loss"
+for L in 0 20; do
+  ./bin/server >/tmp/t_srv.log 2>&1 & SP=$!; sleep 0.4
+  OUT=$(timeout 120 ./bin/client $L 2>&1 | tail -4)
+  kill $SP 2>/dev/null; wait $SP 2>/dev/null
+  echo "$OUT" | grep -q "All 62 packets delivered" && echo "ok:   62/62 packets delivered at $L% loss" || { echo "FAIL: delivery at $L% loss"; echo "$OUT"; fail=1; }
+done
+step "Smart-RUDP transport modes complete all packets (lossy emulated path)"
+for variant in "plain:./bin/server" "sack:./bin/server_sack"; do
+  name=${variant%%:*}; srv=${variant##*:}; port=$((9600 + RANDOM % 300))
+  gcc -DSERVER_PORT=$port $( [ $name = sack ] && echo -DRUDP_SACK ) -o bin/server_t src/server.c src/common.c
+  ./bin/server_t >/dev/null 2>&1 & SP=$!; sleep 0.3
+  for m in aimd rl2 deep; do
+    R=$(timeout 120 ./bin/smart_client --mode $m --port $port --delay 20 --jitter 5 --loss 3 --rate 800 --queue 50 --packets 300 --qfile results/q_chat.txt --dfile results/dqn_chat.txt --sack $([ $name = sack ] && echo 1 || echo 0) --seed 2 | grep RESULT)
+    [ -n "$R" ] && echo "ok:   $m with $name server finished: $(echo $R | cut -d, -f4) ms" || { echo "FAIL: $m with $name server"; fail=1; }
+  done
+  kill $SP 2>/dev/null; wait $SP 2>/dev/null
+done
+step "simulator and controllers"; python3 tests/test_sim.py || fail=1
+echo; [ $fail = 0 ] && echo "ALL TESTS PASSED" || echo "SOME TESTS FAILED"; exit $fail

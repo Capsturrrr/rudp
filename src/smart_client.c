@@ -2,6 +2,11 @@
  * Smart-RUDP client: RUDP sender with a pluggable congestion controller.
  *   --mode aimd : rule-based slow start + AIMD (the original RUDP policy)
  *   --mode rl   : Q-learning cwnd controller (rl_cc.h)
+ *   --mode rl2  : the chat-style table agent (no-shrink rule, window cap 32, decisions every 100-500 ms)
+ *   --mode deep : the neural agent (deep_cc.h), same decision loop as rl2
+ *   --reorder 1 : let jitter reorder packets on the emulated forward path
+ *   --sack 1    : selective retransmit using the SACK bitmap in the ACKs (needs a server built with -DRUDP_SACK)
+ *   --init N    : initial window (default 1; the chat-style modes default to 10)
  * Both modes share the same reliability machinery (Go-Back-N, adaptive RTO,
  * dup-ACK fast retransmit that resends the window) so only the cwnd policy differs.
  * The network path (delay, jitter, random loss, bottleneck rate, tail-drop queue) is
@@ -18,6 +23,7 @@
 #include <sys/socket.h>
 #include "common.h"
 #include "rl_cc.h"
+#include "deep_cc.h"
 
 #define PKT_BYTES 40
 #define MAXN 4096
@@ -64,7 +70,7 @@ static void pcap_write(double t_ms, int to_server, int port, const uint8_t *pl, 
 /* ---- emulated path parameters ---- */
 static double delay_ms = 10, jitter_ms = 0, loss_pct = 0, rate_pps = 0;
 static int queue_cap = 50;
-static int emu = 1;
+static int emu = 1, reorder = 0;
 static double last_depart = 0, last_arrive_f = 0, last_arrive_r = 0;
 static double depart_q[QCAP]; static int dq_h = 0, dq_t = 0;
 static long drops_random = 0, drops_queue = 0;
@@ -84,7 +90,7 @@ static double fwd_path(double now) {
         last_depart = depart; depart_q[dq_t++ % QCAP] = depart;
     }
     double arr = depart + delay_ms + jit();
-    if (arr < last_arrive_f) arr = last_arrive_f;      /* keep path in-order */
+    if (!reorder && arr < last_arrive_f) arr = last_arrive_f;      /* keep path in-order unless --reorder 1 */
     last_arrive_f = arr; return arr;
 }
 static double rev_path(double now) {
@@ -97,7 +103,7 @@ static double rev_path(double now) {
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
     int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1;
-    double eps = 0.0, maxcwnd = 128, ref = 0;
+    int use_sack = 0; double eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
         if (ARG("--mode")) mode = argv[++i];
@@ -118,9 +124,17 @@ int main(int argc, char **argv) {
         else if (ARG("--maxcwnd")) maxcwnd = atof(argv[++i]);
         else if (ARG("--pcap")) pcapp = argv[++i];
         else if (ARG("--ref")) ref = atof(argv[++i]);
+        else if (ARG("--reorder")) reorder = atoi(argv[++i]);
+        else if (ARG("--sack")) use_sack = atoi(argv[++i]);
+        else if (ARG("--init")) init_cwnd = atof(argv[++i]);
+        else if (ARG("--dfile")) dfile = argv[++i];
         else { fprintf(stderr, "bad arg %s\n", argv[i]); return 2; }
     }
     int use_rl = !strcmp(mode, "rl");
+    int use_deep = !strcmp(mode, "deep"), use_rl2 = !strcmp(mode, "rl2"), chat = use_deep || use_rl2;
+    if (chat && maxcwnd > 32) maxcwnd = 32;
+    if (init_cwnd < 0) init_cwnd = chat ? 10.0 : 1.0;
+    deep_net_t dnet; if (use_deep && (!dfile || deep_load(&dnet, dfile) != 0)) { fprintf(stderr, "need --dfile with the exported network\n"); return 2; }
     if (npk > MAXN) npk = MAXN;
     if (queue_cap > QCAP / 2) queue_cap = QCAP / 2;
     if (ref <= 0) ref = rate_pps > 0 ? rate_pps : 1000;
@@ -129,7 +143,7 @@ int main(int argc, char **argv) {
 
     rl_agent_t ag; int have_q = 0;
     rl_init(&ag, 0.15, 0.9, train ? eps : 0.0);
-    if (use_rl && qfile && rl_load(&ag, qfile) == 0) have_q = 1;
+    if ((use_rl || use_rl2) && qfile && rl_load(&ag, qfile) == 0) have_q = 1;
     (void)have_q;
     ag.eps = train ? eps : 0.0;
 
@@ -162,7 +176,7 @@ int main(int argc, char **argv) {
 
     /* ---- packets ---- */
     static rudp_packet_t pk[MAXN];
-    static double sent_at[MAXN]; static uint8_t retx_flag[MAXN];
+    static double sent_at[MAXN]; static uint8_t retx_flag[MAXN], sacked[MAXN];
     uint32_t base_seq = cseq + 1;
     for (int i = 0; i < npk; i++) {
         memset(&pk[i], 0, sizeof pk[i]);
@@ -176,13 +190,14 @@ int main(int argc, char **argv) {
 
     /* ---- sender state ---- */
     int base = 0, next = 0, dup = 0, recover = -1; uint32_t last_ack = 0;
-    double cwnd = 1.0, ssthresh = 16.0, srtt = -1, rttvar = 0, rto = 1000;
+    double cwnd = init_cwnd, ssthresh = 16.0, srtt = -1, rttvar = 0, rto = 1000;
     double min_rtt = 1e9, rtt_sum = 0, dev_floor = 1e9; long rtt_n = 0;
     long tx_total = 0, retx = 0, timeouts = 0, fast_retx = 0;
     double timer_start = 0; int timer_on = 0;
     /* RL interval stats */
     double iv_start = 0, iv_rtt_sum = 0; long iv_rtt_n = 0, iv_acked = 0, iv_sent = 0, iv_retx = 0;
     int prev_s = -1, prev_a = -1; double rew_sum = 0; long rew_n = 0;
+    long iv_new = 0, iv_lossev = 0; int last_act = 2;
 
     double t0 = now_ms(); iv_start = t0; timer_start = t0;
     if (tr) fprintf(tr, "0,START,%.2f,0\n", cwnd);
@@ -190,7 +205,7 @@ int main(int argc, char **argv) {
 #define TX(i, isretx) do { \
         uint8_t b_[BUFFER_SIZE]; int l_ = rudp_pack(&pk[i], b_, sizeof b_); \
         double tn_ = now_ms(); double ar_ = fwd_path(tn_); \
-        tx_total++; iv_sent++; if (isretx) { retx++; iv_retx++; retx_flag[i] = 1; } \
+        tx_total++; iv_sent++; if (!(isretx)) iv_new++; if (isretx) { retx++; iv_retx++; retx_flag[i] = 1; } \
         sent_at[i] = tn_; \
         if (ar_ >= 0) rpush(&fwd, ar_, b_, l_); \
     } while (0)
@@ -217,6 +232,10 @@ int main(int argc, char **argv) {
             pcap_write(now, 0, port, p->buf, p->len); rev.head++;
             if (!okp || !(ack.flags & FLAG_ACK)) continue;
             uint32_t a = ack.ack_num;
+            if (use_sack && ack.payload_len == 8) {
+                uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | ack.payload[k];
+                for (int j = 1; j < 64; j++) if (bits >> j & 1) { long ix = (long)(a + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < npk) sacked[ix] = 1; }
+            }
             if (a > pk[base].seq_num) {
                 int nb = base;
                 while (nb < npk && pk[nb].seq_num < a) nb++;
@@ -231,7 +250,7 @@ int main(int argc, char **argv) {
                     rto = srtt + 4 * rttvar; if (rto < 60) rto = 60; if (rto > 3000) rto = 3000;
                 }
                 iv_acked += newly; base = nb; dup = 0; last_ack = a;
-                if (!use_rl) {
+                if (!use_rl && !chat) {
                     for (int k = 0; k < newly; k++) {
                         if (cwnd < ssthresh) cwnd += 1.0; else cwnd += 1.0 / cwnd;
                     }
@@ -242,11 +261,12 @@ int main(int argc, char **argv) {
             } else if (a == last_ack && a == pk[base].seq_num) {
                 dup++;
                 if (dup >= DUP_ACK_THRESHOLD && base > recover) {
-                    recover = next - 1; fast_retx++;
-                    if (!use_rl) {
+                    recover = next - 1; fast_retx++; iv_lossev++;
+                    if (!use_rl && !chat) {
                         ssthresh = cwnd / 2; if (ssthresh < 1) ssthresh = 1; cwnd = ssthresh;
                     }
-                    for (int i = base; i < next; i++) TX(i, 1);
+                    { int hi = next; if (use_sack) { hi = base + 1; for (int i = base; i < next; i++) if (sacked[i]) hi = i; }
+                      for (int i = base; i < hi; i++) if (!(use_sack && sacked[i])) TX(i, 1); }
                     dup = 0; timer_start = now;
                     if (tr) fprintf(tr, "%.1f,FAST_RETX,%.2f,%.1f\n", now - t0, cwnd, srtt);
                 }
@@ -254,14 +274,43 @@ int main(int argc, char **argv) {
         }
         /* 4. RTO */
         if (timer_on && base < npk && now - timer_start >= rto) {
-            timeouts++;
+            timeouts++; iv_lossev++;
             ssthresh = cwnd / 2; if (ssthresh < 2) ssthresh = 2;
-            if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
+            if (chat) { /* the chat-style agents leave the window to the policy */ } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
             rto = rto * 2 > 3000 ? 3000 : rto * 2;
             recover = next - 1; dup = 0;
-            for (int i = base; i < next; i++) TX(i, 1);
+            for (int i = base; i < next; i++) if (!(use_sack && sacked[i])) TX(i, 1);
             timer_start = now;
             if (tr) fprintf(tr, "%.1f,TIMEOUT,%.2f,%.1f\n", now - t0, cwnd, srtt);
+        }
+        /* 5a. chat-style agents: decide every clamp(srtt, 100, 500) ms, as the trained agents expect */
+        if (chat) {
+            double ivlen = srtt > 0 ? (srtt < 100 ? 100 : srtt > 500 ? 500 : srtt) : 500;
+            if (now - iv_start >= ivlen) {
+                double dur = (now - iv_start) / 1000.0;
+                long nw = iv_new, ac = iv_acked, le = iv_lossev;
+                double avg_rtt = iv_rtt_n ? iv_rtt_sum / iv_rtt_n : (srtt > 0 ? srtt : 1);
+                iv_start = now; iv_rtt_sum = 0; iv_rtt_n = iv_acked = iv_sent = iv_retx = 0; iv_new = iv_lossev = 0;
+                if (!(nw == 0 && ac == 0 && le == 0)) {
+                    double base_r = min_rtt < 1e8 ? min_rtt : 50.0;
+                    double ratio = avg_rtt / base_r; if (ratio < 1) ratio = 1;
+                    double lossf = (double)le / (nw > 0 ? nw : 1); if (lossf > 1) lossf = 1;
+                    double bs = base_r / 1000.0; if (bs < 0.02) bs = 0.02;
+                    double peak = 32.0 * dur / bs; if (peak < 1) peak = 1;
+                    double thr = ac / peak; if (thr > 1) thr = 1;
+                    int lo = (lossf == 0 && ratio < 1.5) ? 2 : 0;           /* no congestion signal: never shrink */
+                    int act;
+                    if (use_deep) {
+                        double x[DN_IN] = { (ratio - 1.0 > 3.0 ? 3.0 : ratio - 1.0) / 3.0, (lossf > 0.3 ? 0.3 : lossf) / 0.3, cwnd / 32.0, thr, RL_MULT[last_act] - 1.0 }, q[DN_OUT];
+                        deep_forward(&dnet, x, q); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (q[k] > q[act]) act = k;
+                    } else {
+                        int s2 = rl_state(ratio, lossf, cwnd); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (ag.q[s2][k] > ag.q[s2][act]) act = k;
+                    }
+                    cwnd *= RL_MULT[act]; if (cwnd < 2) cwnd = 2; if (cwnd > maxcwnd) cwnd = maxcwnd;
+                    last_act = act;
+                    if (tr) fprintf(tr, "%.1f,RL_%d,%.2f,%.1f\n", now - t0, act, cwnd, srtt);
+                }
+            }
         }
         /* 5. RL monitor interval */
         if (use_rl) {

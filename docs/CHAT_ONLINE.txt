@@ -39,3 +39,7 @@ Deep (neural network) controller
    Pick "Smart-RUDP (deep, neural net)" in the controller dropdown. Needs numpy only (no torch).
    Training is seed-sensitive (1 of 4 seeds was worse than AIMD), hence the validation pick.
    Stress test with all controllers: python3 web/stress.py
+
+Neural agent in the C transport
+   make smart sack ; python3 web/export_dqn.py
+   ./bin/smart_client --mode deep --init 10 --dfile results/dqn_chat.txt ...   (see README)
