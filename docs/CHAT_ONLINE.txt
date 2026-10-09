@@ -1,0 +1,22 @@
+RUDP CHAT OVER THE INTERNET (two people, two machines)
+
+Build once:   git pull && make chat
+
+OPTION A (most reliable): Tailscale
+ 1. Both install Tailscale (tailscale.com/download), log in, join the same tailnet
+    (one person shares their machine with the other).
+ 2. Each runs  tailscale ip -4  and tells the other their 100.x.x.x address.
+ 3. Run at the same time:
+      you:    ./bin/chat 9001 FRIEND_100.x.x.x:9001 Harsh 20
+      friend: ./bin/chat 9001 YOUR_100.x.x.x:9001 Rohit 20
+    (the 20 is simulated extra packet loss; use 0 for none)
+
+OPTION B: public IPs (works only on home routers, usually not hostel Wi-Fi)
+ 1. Each finds their public IP (search "what is my ip").
+ 2. Run within a few seconds of each other:
+      you:    ./bin/chat 9001 FRIEND_PUBLIC_IP:9001 Harsh
+      friend: ./bin/chat 9001 YOUR_PUBLIC_IP:9001 Rohit
+    It prints "Connected to ..." when the path opens.
+
+Same machine, two terminals still works:
+   ./bin/chat 9001 9002 Alice 30     ./bin/chat 9002 9001 Bob 30

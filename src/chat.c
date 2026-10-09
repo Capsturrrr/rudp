@@ -8,7 +8,12 @@
  * Packet loss is simulated on the sending side so you can watch messages
  * still arrive complete and in order.
  *
- * Usage:  ./bin/chat <my_port> <peer_port> <name> [loss_percent]
+ * Usage:  ./bin/chat <my_port> <peer> <name> [loss_percent]
+ *   <peer> is a port (same machine) or ip:port (another machine / the internet).
+ * Across the internet: both people run it at about the same time. Each side
+ * sends a few small "punch" packets to the other's public address so home
+ * routers (NAT) open a return path; the peer address is then learned from
+ * the first packet received.
  * Run two copies in two terminals with the ports swapped, e.g.
  *   ./bin/chat 9001 9002 Alice 30
  *   ./bin/chat 9002 9001 Bob   30
@@ -126,7 +131,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <my_port> <peer_port> <name> [loss_percent]\n", argv[0]);
         return 1;
     }
-    int my_port = atoi(argv[1]), peer_port = atoi(argv[2]);
+    int my_port = atoi(argv[1]), peer_port;
+    char peer_ip[64] = "127.0.0.1";
+    const char *colon = strrchr(argv[2], ':');
+    if (colon) {
+        size_t n = (size_t)(colon - argv[2]);
+        if (n >= sizeof(peer_ip)) { fprintf(stderr, "bad peer address\n"); return 1; }
+        memcpy(peer_ip, argv[2], n); peer_ip[n] = '\0';
+        peer_port = atoi(colon + 1);
+    } else peer_port = atoi(argv[2]);
+    int remote = strcmp(peer_ip, "127.0.0.1") != 0;
     my_name = argv[3];
     if (argc > 4) loss_percent = atoi(argv[4]);
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
@@ -135,19 +149,26 @@ int main(int argc, char **argv) {
     struct sockaddr_in me;
     memset(&me, 0, sizeof(me));
     me.sin_family = AF_INET;
-    me.sin_addr.s_addr = inet_addr("127.0.0.1");
+    me.sin_addr.s_addr = remote ? htonl(INADDR_ANY) : inet_addr("127.0.0.1");
     me.sin_port = htons((uint16_t)my_port);
     if (bind(sockfd, (struct sockaddr *)&me, sizeof(me)) < 0) { perror("bind"); return 1; }
     memset(&peer_addr, 0, sizeof(peer_addr));
     peer_addr.sin_family = AF_INET;
-    peer_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    peer_addr.sin_addr.s_addr = inet_addr(peer_ip);
+    if (peer_addr.sin_addr.s_addr == INADDR_NONE) { fprintf(stderr, "bad peer ip %s\n", peer_ip); return 1; }
     peer_addr.sin_port = htons((uint16_t)peer_port);
 
-    printf("RUDP Chat as %s on port %d -> peer %d, simulated loss %d%%\n", my_name, my_port, peer_port, loss_percent);
+    printf("RUDP Chat as %s on port %d -> peer %s:%d, simulated loss %d%%\n", my_name, my_port, peer_ip, peer_port, loss_percent);
+    if (remote) printf("Connecting (hole punching) ... waiting for the other side.\n");
     printf("Type a message and press Enter. Ctrl+D to quit.\n\n");
 
-    int stdin_open = 1;
+    int stdin_open = 1, heard = !remote;
+    long long last_punch = 0;
     for (;;) {
+        if (!heard && now_ms() - last_punch > 1000) {   /* open the NAT path */
+            last_punch = now_ms();
+            tx(FLAG_ACK, 0, expected, NULL, 0);
+        }
         fd_set rf;
         FD_ZERO(&rf);
         FD_SET(sockfd, &rf);
@@ -158,8 +179,16 @@ int main(int argc, char **argv) {
         int rc = select(maxfd + 1, &rf, NULL, NULL, &tv);
         if (rc > 0 && FD_ISSET(sockfd, &rf)) {
             uint8_t buf[BUFFER_SIZE + MAX_PAYLOAD];
-            ssize_t n = recvfrom(sockfd, buf, sizeof(buf), 0, NULL, NULL);
-            if (n > 0) handle_packet(buf, n);
+            struct sockaddr_in src; socklen_t sl = sizeof(src);
+            ssize_t n = recvfrom(sockfd, buf, sizeof(buf), 0, (struct sockaddr *)&src, &sl);
+            if (n > 0) {
+                rudp_packet_t chk;
+                if (remote && rudp_unpack(buf, (size_t)n, &chk) == 0) {
+                    peer_addr = src;   /* follow the peer's real (NAT-mapped) address */
+                    if (!heard) { heard = 1; printf("Connected to %s:%d. Type a message.\n\n", inet_ntoa(src.sin_addr), ntohs(src.sin_port)); }
+                }
+                handle_packet(buf, n);
+            }
         }
         if (rc > 0 && stdin_open && FD_ISSET(0, &rf)) {
             char line[MSG_MAX + 2];
