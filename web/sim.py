@@ -9,7 +9,7 @@ from cc import Controller
 TIMEOUT = 0.3
 TICK = 0.01
 
-def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=120.0, jitter=0.0):
+def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, jitter=0.0):
     rng = random.Random(seed)
     ev, cnt = [], 0
     def push(t, kind, data=None):
