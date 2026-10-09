@@ -72,7 +72,7 @@ class Chat:
         s.q = load_q(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "q_lossy.txt"))
         s.agent_ok = s.q is not None
         s.last_sa = None
-        s.iv_start = time.time(); s.iv_sent = s.iv_retx = s.iv_acked = 0; s.iv_rtts = []
+        s.iv_start = time.time(); s.iv_sent = s.iv_retx = s.iv_acked = s.iv_new = s.iv_lossev = 0; s.iv_rtts = []
         s.last_action = "-"
 
 
@@ -94,6 +94,7 @@ class Chat:
         if flags & DATA:
             s.iv_sent += 1
             if retx: s.iv_retx += 1
+            else: s.iv_new += 1
         s.stats["sent"] += 1
         if retx: s.stats["retx"] += 1
         if s.loss > 0 and s.import_random.random() * 100 < s.loss:
@@ -155,32 +156,37 @@ class Chat:
             s.note(f"stress test done: {s.bulk['total']} messages in {s.bulk['done_at'] - s.bulk['start']:.1f} s ({s.bulk['mode']})", "ok")
 
     def loss_event(s, kind):
+        s.iv_lossev += 1
         if s.mode == "aimd":
             if kind == "timeout": s.ssthresh = max(2.0, s.cwnd / 2); s.cwnd = 1.0
             else: s.ssthresh = max(2.0, s.cwnd / 2); s.cwnd = s.ssthresh
 
     def rl_step(s):
-        """Once per interval: observe state, learn from the last action, pick the next."""
+        """Once per interval (about one RTT): observe, learn from the last action, choose the next."""
         now = time.time()
-        if now - s.iv_start < INTERVAL: return
+        interval = max(0.1, min(0.5, s.srtt or 0.5))
+        if now - s.iv_start < interval: return
         dur = now - s.iv_start
-        sent, retx, acked = s.iv_sent, s.iv_retx, s.iv_acked
+        new, lossev, acked = s.iv_new, s.iv_lossev, s.iv_acked
         rtts = s.iv_rtts
         s.iv_start, s.iv_sent, s.iv_retx, s.iv_acked, s.iv_rtts = now, 0, 0, 0, []
-        if s.mode != "smart" or not s.agent_ok or sent == 0: return
+        s.iv_new = s.iv_lossev = 0
+        if s.mode != "smart" or not s.agent_ok or (new == 0 and acked == 0 and lossev == 0): return
         base_rtt = s.min_rtt or 0.05
         cur = (sum(rtts) / len(rtts)) if rtts else (s.srtt or base_rtt)
         ratio = max(1.0, cur / base_rtt)
-        loss = retx / sent
+        loss = min(1.0, lossev / max(1, new))        # loss events per new packet (Go-Back-N inflates raw resend counts)
         st = rl_state(ratio, loss, s.cwnd)
         if s.last_sa is not None:
-            thr = min(1.0, acked / max(1.0, s.cwnd))
+            full = max(1.0, s.cwnd * dur / max(base_rtt, 0.02))   # acks a full window would produce
+            thr = min(1.0, acked / full)
             r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
             ps, pa = s.last_sa
             s.q[ps][pa] += 0.15 * (r + 0.9 * max(s.q[st]) - s.q[ps][pa])
         a = max(range(5), key=lambda k: s.q[st][k])
+        if loss == 0 and ratio < 1.15 and s.pending: a = max(a, 3)   # backlog on a clean path: never shrink
         s.last_sa = (st, a)
-        s.cwnd = max(1.0, min(CWND_MAX, s.cwnd * RL_MULT[a]))
+        s.cwnd = max(2.0, min(CWND_MAX, s.cwnd * RL_MULT[a]))
         s.last_action = f"x{RL_MULT[a]}"
         s.note(f"smart: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {s.cwnd:.1f} ({s.last_action})", "info")
 
