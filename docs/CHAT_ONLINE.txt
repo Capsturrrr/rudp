@@ -20,3 +20,8 @@ OPTION B: public IPs (works only on home routers, usually not hostel Wi-Fi)
 
 Same machine, two terminals still works:
    ./bin/chat 9001 9002 Alice 30     ./bin/chat 9002 9001 Bob 30
+
+WEB VERSION (browser UI, same protocol, talks to ./bin/chat or another web copy)
+   python3 web/rudp_web.py --udp 9001 --peer FRIEND_IP:9001 --name Harsh --http 8080
+   open http://localhost:8080
+   Right panel: live packet-loss slider, sent/lost/resent counters, in-flight window, protocol log.

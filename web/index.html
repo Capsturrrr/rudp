@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RUDP Chat</title>
+<style>
+:root{--bg:#0b0f14;--pn:#141b24;--ln:#243040;--tx:#e6edf3;--mu:#8b98a5;--gr:#39ff88;--am:#ffb000;--rd:#ff6b6b;--me:#12351f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{padding:10px 16px;border-bottom:1px solid var(--ln);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+h1{font:700 18px ui-monospace,monospace;color:var(--gr);margin:0}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--am)}.dot.on{background:var(--gr)}
+main{flex:1;display:grid;grid-template-columns:1fr 360px;min-height:0}
+@media(max-width:800px){main{grid-template-columns:1fr;grid-template-rows:1fr 220px}}
+#chat{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--ln)}
+#msgs{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+.m{max-width:78%;padding:8px 12px;border-radius:12px;background:var(--pn);align-self:flex-start;word-break:break-word}
+.m.me{align-self:flex-end;background:var(--me)}.m small{display:block;color:var(--mu);font-size:11px;margin-top:3px}
+form{display:flex;gap:8px;padding:10px;border-top:1px solid var(--ln)}
+input[type=text]{flex:1;background:var(--pn);border:1px solid var(--ln);color:var(--tx);padding:10px;border-radius:8px;font:inherit}
+button{background:var(--gr);color:#04210f;border:0;border-radius:8px;padding:0 18px;font-weight:700;cursor:pointer}
+aside{display:flex;flex-direction:column;min-height:0;padding:12px;gap:10px}
+.box{background:var(--pn);border:1px solid var(--ln);border-radius:8px;padding:10px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center}.stats b{display:block;font:700 20px ui-monospace,monospace;color:var(--gr)}.stats span{color:var(--mu);font-size:11px}
+#log{flex:1;overflow:auto;font:12px ui-monospace,monospace;display:flex;flex-direction:column;gap:3px}
+.loss{color:var(--rd)}.retx{color:var(--am)}.ok{color:var(--gr)}.info{color:var(--mu)}
+input[type=range]{width:100%}h2{font:600 12px ui-monospace,monospace;color:var(--mu);margin:0 0 6px;text-transform:uppercase;letter-spacing:.08em}
+</style></head><body>
+<header><h1>RUDP Chat</h1><span class="dot" id="dot"></span><span id="conn" style="color:var(--mu)">waiting for peer...</span><span id="who" style="margin-left:auto;color:var(--mu)"></span></header>
+<main>
+<section id="chat"><div id="msgs"></div>
+<form id="f"><input type="text" id="t" placeholder="Type a message" autocomplete="off" autofocus><button>Send</button></form></section>
+<aside>
+<div class="box"><h2>Packet loss to simulate: <span id="lv">0</span>%</h2><input type="range" id="loss" min="0" max="60" value="0"></div>
+<div class="box stats"><div><b id="s1">0</b><span>packets sent</span></div><div><b id="s2" style="color:var(--rd)">0</b><span>lost</span></div><div><b id="s3" style="color:var(--am)">0</b><span>resent</span></div></div>
+<div class="box"><h2>Window</h2><span id="win" style="font-family:ui-monospace,monospace"></span></div>
+<div class="box" style="flex:1;display:flex;flex-direction:column;min-height:0"><h2>Protocol log</h2><div id="log"></div></div>
+</aside></main>
+<script>
+const $=id=>document.getElementById(id);let sliderTouched=false;
+async function tick(){try{const s=await (await fetch('/state')).json();
+$('dot').className='dot'+(s.connected?' on':'');$('conn').textContent=s.connected?('connected to '+s.peer):'waiting for peer '+s.peer+' ...';$('who').textContent='you are '+s.name;
+const m=$('msgs'),near=m.scrollHeight-m.scrollTop-m.clientHeight<80;
+m.innerHTML=s.msgs.map(x=>`<div class="m ${x.mine?'me':''}">${esc(x.text)}<small>#${x.seq} · ${x.t}${x.mine?(x.delivered?' · ✓ delivered':' · sending...'):''}</small></div>`).join('');if(near)m.scrollTop=m.scrollHeight;
+$('s1').textContent=s.stats.sent;$('s2').textContent=s.stats.dropped;$('s3').textContent=s.stats.retx;
+$('win').textContent=`in flight ${s.next-s.base} / ${s.window}   (next #${s.next}, acked up to #${s.base})`;
+if(!sliderTouched){$('loss').value=s.loss;$('lv').textContent=s.loss}
+const l=$('log'),ln=l.scrollHeight-l.scrollTop-l.clientHeight<40;l.innerHTML=s.log.map(e=>`<div class="${e.kind}">${e.t} ${esc(e.text)}</div>`).join('');if(ln)l.scrollTop=l.scrollHeight}catch(e){}}
+function esc(t){return t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+$('f').onsubmit=async e=>{e.preventDefault();const v=$('t').value;if(!v.trim())return;const r=await (await fetch('/send',{method:'POST',body:JSON.stringify({text:v})})).json();if(r.ok)$('t').value='';tick()};
+$('loss').oninput=e=>{sliderTouched=true;$('lv').textContent=e.target.value;fetch('/loss',{method:'POST',body:JSON.stringify({loss:+e.target.value})})};
+setInterval(tick,300);tick();
+</script></body></html>
