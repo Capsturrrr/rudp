@@ -39,8 +39,15 @@ def save_q(q, path):
 LAG = 1
 MASK = True
 
+def deep_feat(ratio, loss, cwnd, thr, last_a):
+    """Continuous state for the neural agent (the table agent buckets the first three)."""
+    return [min(ratio - 1.0, 3.0) / 3.0, min(loss, 0.3) / 0.3, cwnd / CWND_MAX, thr, RL_MULT[last_a] - 1.0]
+
 class Controller:
-    def __init__(self, mode="fixed", q=None, alpha=0.15, gamma=0.9, eps=0.0, rng=None):
+    def __init__(self, mode="fixed", q=None, alpha=0.15, gamma=0.9, eps=0.0, rng=None, net=None):
+        self.net = net
+        self.net_learn = net is not None and eps > 0   # frozen unless trained with exploration
+        self.prev_a = 2
         self.q, self.alpha, self.gamma, self.eps = q, alpha, gamma, eps
         self.rng = rng or random.Random()
         self.learn = True
@@ -56,6 +63,8 @@ class Controller:
         self.iv_rtts = []
         self.last_sa = None
         self.hist = []
+        self.prev = None
+        self.prev_a = 2
         self.last_action = "-"
         self.note = None
 
@@ -93,27 +102,36 @@ class Controller:
         dur = now - self.iv_start
         new, lossev, acked, rtts = self.iv_new, self.iv_lossev, self.iv_acked, self.iv_rtts
         self.iv_start, self.iv_new, self.iv_lossev, self.iv_acked, self.iv_rtts = now, 0, 0, 0, []
-        if self.mode != "smart" or self.q is None or (new == 0 and acked == 0 and lossev == 0): return
+        deep = self.mode == "deep" and self.net is not None
+        if not deep and (self.mode != "smart" or self.q is None): return
+        if (new == 0 and acked == 0 and lossev == 0): return
         base = self.min_rtt or 0.05
         cur = (sum(rtts) / len(rtts)) if rtts else (self.srtt or base)
         ratio = max(1.0, cur / base)
         loss = min(1.0, lossev / max(1, new))
-        st = rl_state(ratio, loss, self.cwnd)
-        if self.learn and len(self.hist) >= LAG:
-            # acks seen now were produced by the window chosen two decisions ago (one RTT of lag)
-            peak = max(1.0, CWND_MAX * dur / max(base, 0.02))
-            thr = min(1.0, acked / peak)
-            r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
-            ps, pa = self.hist[-LAG]
-            ns = self.hist[-LAG + 1][0] if LAG > 1 else st
-            self.q[ps][pa] += self.alpha * (r + self.gamma * max(self.q[ns]) - self.q[ps][pa])
+        peak = max(1.0, CWND_MAX * dur / max(base, 0.02))
+        thr = min(1.0, acked / peak)
         allowed = range(5)
         if MASK and loss == 0 and ratio < 1.5:
             allowed = (2, 3, 4)          # no congestion signal: never shrink the window
-        if self.eps > 0 and self.rng.random() < self.eps: a = self.rng.choice(list(allowed))
-        else: a = max(allowed, key=lambda k: self.q[st][k])
-        self.last_sa = (st, a)
-        self.hist = (self.hist + [(st, a)])[-2:]
+        r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
+        if deep:
+            f = deep_feat(ratio, loss, self.cwnd, thr, self.prev_a)
+            if self.learn and self.net_learn and self.prev is not None:
+                self.net.store(self.prev[0], self.prev[1], r, f); self.net.train_step()
+            if self.eps > 0 and self.rng.random() < self.eps: a = self.rng.choice(list(allowed))
+            else:
+                qv = self.net.q(f); a = max(allowed, key=lambda k: qv[k])
+            self.prev = (f, a); self.prev_a = a
+        else:
+            st = rl_state(ratio, loss, self.cwnd)
+            if self.learn and len(self.hist) >= LAG:
+                ps, pa = self.hist[-LAG]
+                self.q[ps][pa] += self.alpha * (r + self.gamma * max(self.q[st]) - self.q[ps][pa])
+            if self.eps > 0 and self.rng.random() < self.eps: a = self.rng.choice(list(allowed))
+            else: a = max(allowed, key=lambda k: self.q[st][k])
+            self.last_sa = (st, a)
+            self.hist = (self.hist + [(st, a)])[-2:]
         self.cwnd = max(2.0, min(CWND_MAX, self.cwnd * RL_MULT[a]))
         self.last_action = f"x{RL_MULT[a]}"
-        self.note = f"smart: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {self.cwnd:.1f} ({self.last_action})"
+        self.note = f"{self.mode}: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {self.cwnd:.1f} ({self.last_action})"

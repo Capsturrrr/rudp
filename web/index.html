@@ -30,7 +30,7 @@ input[type=range]{width:100%}h2{font:600 12px ui-monospace,monospace;color:var(-
 <div class="box"><h2>Packet loss to simulate: <span id="lv">0</span>%</h2><input type="range" id="loss" min="0" max="60" value="0"></div>
 <div class="box stats"><div><b id="s1">0</b><span>packets sent</span></div><div><b id="s2" style="color:var(--rd)">0</b><span>lost</span></div><div><b id="s3" style="color:var(--am)">0</b><span>resent</span></div></div>
 <div class="box"><h2>Window controller</h2>
-<select id="mode" style="width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--ln);padding:6px;border-radius:6px"><option value="fixed">Fixed window (8)</option><option value="aimd">AIMD (rule-based)</option><option value="smart">Smart-RUDP (Q-learning)</option></select>
+<select id="mode" style="width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--ln);padding:6px;border-radius:6px"><option value="fixed">Fixed window (8)</option><option value="aimd">AIMD (rule-based)</option><option value="smart">Smart-RUDP (Q-table)</option><option value="deep">Smart-RUDP (deep, neural net)</option></select>
 <div id="win" style="font-family:ui-monospace,monospace;margin-top:8px;font-size:13px"></div>
 <button type="button" id="bulk" style="margin-top:8px;padding:8px 12px;width:100%">Send 60 test messages</button><div id="bres" style="font-family:ui-monospace,monospace;font-size:13px;margin-top:6px;color:var(--am)"></div></div>
 <div class="box" style="flex:1;display:flex;flex-direction:column;min-height:0"><h2>Protocol log</h2><div id="log"></div></div>
@@ -42,7 +42,7 @@ $('dot').className='dot'+(s.connected?' on':'');$('conn').textContent=s.connecte
 const m=$('msgs'),near=m.scrollHeight-m.scrollTop-m.clientHeight<80;
 m.innerHTML=s.msgs.map(x=>`<div class="m ${x.mine?'me':''}">${esc(x.text)}<small>#${x.seq} · ${x.t}${x.mine?(x.delivered?' · ✓ delivered':' · sending...'):''}</small></div>`).join('');if(near)m.scrollTop=m.scrollHeight;
 $('s1').textContent=s.stats.sent;$('s2').textContent=s.stats.dropped;$('s3').textContent=s.stats.retx;
-$('win').textContent=`in flight ${s.next-s.base} / window ${s.window}  cwnd ${s.cwnd}  queued ${s.queued}`+(s.mode==='smart'?`  last action ${s.last_action}`+(s.agent_ok?'':' (no Q-table!)'):'');
+$('win').textContent=`in flight ${s.next-s.base} / window ${s.window}  cwnd ${s.cwnd}  queued ${s.queued}`+((s.mode==='smart'||s.mode==='deep')?`  last action ${s.last_action}`+(s.agent_ok?'':' (no Q-table!)'):'');
 if(document.activeElement!==$('mode'))$('mode').value=s.mode;
 $('bres').textContent=s.bulk?(s.bulk.done?`${s.bulk.total} msgs in ${s.bulk.elapsed} s (${s.bulk.mode})`:`running... ${s.bulk.elapsed} s (${s.bulk.mode})`):'';
 if(!sliderTouched){$('loss').value=s.loss;$('lv').textContent=s.loss}

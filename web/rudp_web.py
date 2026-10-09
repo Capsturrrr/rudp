@@ -13,6 +13,7 @@ Standard library only.
 import argparse, collections, heapq, json, os, select, socket, struct, sys, threading, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cc import Controller, load_q
+from dqn import DQN
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -51,7 +52,13 @@ class Chat:
         s.import_random = __import__("random")
         here = os.path.dirname(os.path.abspath(__file__))
         q = load_q(os.path.join(here, "..", "results", "q_chat.txt")) or load_q(os.path.join(here, "..", "results", "q_lossy.txt"))
-        s.cc = Controller("fixed", q)
+        net = None
+        try:
+            dp = os.path.join(here, "..", "results", "dqn_chat.json")
+            if os.path.exists(dp): net = DQN(); net.load(dp)
+        except Exception: net = None
+        s.cc = Controller("fixed", q, net=net)
+        s.deep_ok = net is not None
         s.agent_ok = q is not None
         s.first_sent, s.retxed = {}, set()
         s.pending = collections.deque()
@@ -65,7 +72,8 @@ class Chat:
         return s.cc.window()
 
     def set_mode(s, m):
-        if m not in ("fixed", "aimd", "smart"): return
+        if m not in ("fixed", "aimd", "smart", "deep"): return
+        if m == "deep" and not s.deep_ok: return
         s.cc.set_mode(m)
         s.note(f"window controller: {m}", "ok")
 
@@ -185,7 +193,7 @@ class Chat:
         with s.lock:
             ms = [dict(m, delivered=(m["mine"] and m["seq"] < s.base)) for m in s.msgs]
             return dict(name=s.name, peer=f"{s.peer[0]}:{s.peer[1]}", connected=s.heard, loss=s.loss,
-                        base=s.base, next=s.next, expected=s.expected, window=s.window(), mode=s.cc.mode, cwnd=round(s.cc.cwnd, 1), queued=len(s.pending), agent_ok=s.agent_ok, last_action=s.cc.last_action, bulk=(dict(s.bulk, elapsed=round((s.bulk['done_at'] or time.time()) - s.bulk['start'], 1), done=s.bulk['done_at'] is not None) if s.bulk else None),
+                        base=s.base, next=s.next, expected=s.expected, window=s.window(), mode=s.cc.mode, cwnd=round(s.cc.cwnd, 1), queued=len(s.pending), agent_ok=s.agent_ok, deep_ok=s.deep_ok, last_action=s.cc.last_action, bulk=(dict(s.bulk, elapsed=round((s.bulk['done_at'] or time.time()) - s.bulk['start'], 1), done=s.bulk['done_at'] is not None) if s.bulk else None),
                         stats=dict(s.stats), msgs=ms, log=s.log[-60:])
 
 
