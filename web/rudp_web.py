@@ -19,12 +19,16 @@ from urllib.parse import urlparse
 
 SYN, ACK, FIN, DATA = 1, 2, 4, 8
 WINDOW, TIMEOUT_MS, DUP = 8, 300, 3
+SRW = 256   # Selective Repeat window and ACK bitmap size (32 bytes), identical to the C transport
 
 
 def checksum(seq, ack, flags, payload):
-    s = sum(struct.pack(">II", seq, ack)) + flags + sum(struct.pack(">H", len(payload))) + sum(payload)
-    while s >> 16: s = (s & 0xFFFF) + (s >> 16)
-    return ~s & 0xFFFF
+    """CRC-16/CCITT-FALSE over seq, ack, flags, payload_len, payload (same as src/common.c)."""
+    crc = 0xFFFF
+    for b in struct.pack(">IIBH", seq, ack, flags, len(payload)) + bytes(payload):
+        crc ^= b << 8
+        for _ in range(8): crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
 
 def pack(seq, ack, flags, payload=b""):
     return struct.pack(">IIBHH", seq, ack, flags, checksum(seq, ack, flags, payload), len(payload)) + payload
@@ -47,6 +51,7 @@ class Chat:
         s.peer = (ip, int(port)); s.heard = False
         s.sendq, s.sent_at = [], []
         s.base = s.next = s.expected = s.dups = 0
+        s.sack_samples, s.sack_done = [], set()
         s.adaptive_rto, s.rto, s.rs, s.rv = False, TIMEOUT_MS / 1000.0, None, 0.0   # RFC 6298 state (seconds)
         s.gbn = False                        # True: original Go-Back-N behaviour (set with --gbn)
         s.sacked, s.rbuf = set(), {}         # Selective Repeat: packets the peer reported / out-of-order packets we hold
@@ -138,12 +143,12 @@ class Chat:
     def on_acked(s, old_base, new_base):
         now = time.time()
         s.sacked = {q for q in s.sacked if q >= new_base}
-        samples = []
+        samples, s.sack_samples = s.sack_samples, []
         for q in range(old_base, new_base):
             t0 = s.first_sent.pop(q, None)
-            if t0 is not None and q not in s.retxed:       # Karn: skip retransmitted samples
+            if t0 is not None and q not in s.retxed and q not in s.sack_done:       # Karn: skip retransmitted samples; SACKed ones were sampled already
                 samples.append(now - t0)
-            s.retxed.discard(q)
+            s.retxed.discard(q); s.sack_done.discard(q)
         s.cc.on_ack(new_base - old_base, samples)
         for r in samples:                                   # RFC 6298 RTO estimator (used only with --rto adaptive)
             if s.rs is None: s.rs, s.rv = r, r / 2
@@ -170,10 +175,13 @@ class Chat:
         if not s.heard:
             s.heard = True; s.note(f"connected to {src[0]}:{src[1]}", "ok")
         if flags & ACK:
-            if not s.gbn and not (flags & DATA) and len(p) == 8:       # bitmap: bit j set = peer holds packet ack+j
-                bits = int.from_bytes(p, "big")
-                for j in range(1, 64):
-                    if (bits >> j) & 1 and s.base <= ack + j < s.next: s.sacked.add(ack + j)
+            if not s.gbn and not (flags & DATA) and len(p) == SRW // 8:       # bitmap: bit j%8 of byte j//8 set = peer holds packet ack+j
+                for j in range(1, SRW):
+                    q = ack + j
+                    if (p[j // 8] >> (j % 8)) & 1 and s.base <= q < s.next:
+                        if q not in s.sacked and q not in s.retxed and q in s.first_sent:
+                            s.sack_samples.append(time.time() - s.first_sent[q]); s.sack_done.add(q)   # RTT is taken when the packet is first reported, not when a hole before it is filled
+                        s.sacked.add(q)
             if s.base < ack <= s.next:
                 s.on_acked(s.base, ack)
                 s.base, s.dups = ack, 0
@@ -191,16 +199,18 @@ class Chat:
                     s.expected += 1
             elif seq < s.expected:
                 s.note(f"duplicate #{seq} discarded", "info")
-            elif not s.gbn and seq < s.expected + 64:
+            elif not s.gbn and seq < s.expected + SRW:
                 if seq not in s.rbuf: s.rbuf[seq] = p
                 s.note(f"out of order: buffered #{seq}, expected #{s.expected}", "info")
             else:
                 s.note(f"out of order: got #{seq}, expected #{s.expected}, discarded", "info")
             if s.gbn: s.tx(ACK, 0, s.expected)
             else:
-                bits = 0
-                for q in s.rbuf: bits |= 1 << (q - s.expected)
-                s.tx(ACK, 0, s.expected, bits.to_bytes(8, "big"))
+                bm = bytearray(SRW // 8)
+                for q in s.rbuf:
+                    j = q - s.expected
+                    if 0 < j < SRW: bm[j // 8] |= 1 << (j % 8)
+                s.tx(ACK, 0, s.expected, bytes(bm))
 
     def loop(s):
         last_punch = 0
@@ -283,12 +293,13 @@ if __name__ == "__main__":
     ap.add_argument("--udp", type=int, default=9001); ap.add_argument("--peer", required=True)
     ap.add_argument("--name", default="me"); ap.add_argument("--http", type=int, default=8080)
     ap.add_argument("--loss", type=int, default=0); ap.add_argument("--delay", type=int, default=0, help="emulated one-way delay in ms")
-    ap.add_argument("--rto", choices=["fixed", "adaptive"], default="fixed", help="retransmission timeout: fixed 300 ms (default) or RFC 6298 adaptive")
+    ap.add_argument("--rto", choices=["fixed", "adaptive"], default="adaptive", help="retransmission timeout: RFC 6298 adaptive (default) or fixed 300 ms")
     ap.add_argument("--tcut", type=float, default=0.0, help="agent safety net: multiply the window by this on a retransmission timeout (0 = off, 0.25 recommended)")
     ap.add_argument("--gbn", action="store_true", help="use the original Go-Back-N behaviour instead of Selective Repeat")
-    ap.add_argument("--hybrid", type=float, default=0.0, help="neural agent hands control to AIMD while the loss fraction per interval is >= this (0 = off, 0.10 recommended)")
+    ap.add_argument("--cap", type=float, default=128.0, help="window ceiling (packets); 128 matches smart_client, 32 restores the original")
+    ap.add_argument("--hybrid", type=float, default=0.10, help="neural agent hands control to AIMD while the loss fraction per interval is >= this (0 = off, 0.10 recommended)")
     a = ap.parse_args()
-    import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid
+    import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid; _cc.CAP = min(a.cap, 250.0)
     import os
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
     chat = Chat(a.udp, a.peer, a.name, a.loss, a.delay)

@@ -199,7 +199,7 @@ int main(int argc, char **argv) {
 
     /* ---- sender state ---- */
     int base = 0, next = 0, dup = 0, recover = -1; uint32_t last_ack = 0;
-    double wmax = 0, kcub = 0, epoch = -1; double cwnd = init_cwnd, ssthresh = ss0, srtt = -1, rttvar = 0, rto = 1000;
+    double rto_mult = getenv("RUDP_RTOMULT") ? atof(getenv("RUDP_RTOMULT")) : 1.3; double wmax = 0, kcub = 0, epoch = -1; double cwnd = init_cwnd, ssthresh = ss0, srtt = -1, rttvar = 0, rto = 1000;
     double min_rtt = 1e9, rtt_sum = 0, dev_floor = 1e9; long rtt_n = 0;
     long tx_total = 0, retx = 0, timeouts = 0, fast_retx = 0;
     double timer_start = 0; int timer_on = 0;
@@ -255,7 +255,7 @@ int main(int argc, char **argv) {
                     if (srtt < 0) { srtt = rtt; rttvar = rtt / 2; }
                     else { rttvar = 0.75 * rttvar + 0.25 * fabs(srtt - rtt); srtt = 0.875 * srtt + 0.125 * rtt; }
                     if (rtt_n >= 8 && rttvar < dev_floor) dev_floor = rttvar;
-                    rto = srtt + 4 * rttvar; if (rto < 60) rto = 60; if (rto > 3000) rto = 3000;
+                    rto = srtt + 4 * rttvar; if (rto < srtt * rto_mult) rto = srtt * rto_mult; if (rto < 60) rto = 60; if (rto > 3000) rto = 3000;
                 }
                 iv_acked += newly; base = nb; dup = 0; last_ack = a;
                 if ((!use_rl && !chat) || guard > 0) {

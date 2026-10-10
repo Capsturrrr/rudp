@@ -32,7 +32,8 @@
 #include <arpa/inet.h>
 #include "common.h"
 
-#define CHAT_WINDOW 8
+#define CHAT_WINDOW 64
+#define SRW 256   /* Selective Repeat window, same as the C transport (server.c) */
 #define CHAT_TIMEOUT_MS 300
 #define MAX_MSGS 4096
 #define MSG_MAX 400
@@ -53,11 +54,11 @@ static long recover = -1;   /* highest seq outstanding at the last retransmit; n
 /* receiver state */
 static uint32_t expected = 0;
 
-/* Selective Repeat (default; RUDP_GBN=1 restores Go-Back-N): the receiver buffers a 64-message window of out-of-order
-   messages and reports them in an 8-byte bitmap inside every ACK; the sender keeps one timer per message. */
+/* Selective Repeat (default; RUDP_GBN=1 restores Go-Back-N): the receiver buffers a 256-message window of out-of-order
+   messages and reports them in a 32-byte bitmap (bit j of byte j/8 = message ack+j received, as in server.c) inside every ACK; the sender keeps one timer per message. */
 static int gbn = 0;
 static uint8_t sacked[MAX_MSGS];
-static char rbuf[64][MSG_MAX + 1]; static uint8_t rhave[64];
+static char rbuf[SRW][MSG_MAX + 1]; static uint8_t rhave[SRW];
 
 static unsigned long n_sent = 0, n_dropped = 0, n_retx = 0;
 
@@ -119,9 +120,8 @@ static void handle_packet(const uint8_t *buf, ssize_t n) {
 
     /* acknowledgment part (cumulative: ack_num = next message the peer expects) */
     if (p.flags & FLAG_ACK) {
-        if (!gbn && !(p.flags & FLAG_DATA) && p.payload_len == 8) {
-            uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | p.payload[k];
-            for (int j = 1; j < 64; j++) if ((bits >> j) & 1) { uint32_t ix = p.ack_num + (uint32_t)j; if (ix >= base && ix < next_seq) sacked[ix % MAX_MSGS] = 1; }
+        if (!gbn && !(p.flags & FLAG_DATA) && p.payload_len == SRW / 8) {
+            for (int j = 1; j < SRW; j++) if ((p.payload[j / 8] >> (j % 8)) & 1) { uint32_t ix = p.ack_num + (uint32_t)j; if (ix >= base && ix < next_seq) sacked[ix % MAX_MSGS] = 1; }
         }
         if (p.ack_num > base && p.ack_num <= next_seq) {
             for (uint32_t s = base; s < p.ack_num; s++) sacked[s % MAX_MSGS] = 0;
@@ -144,25 +144,24 @@ static void handle_packet(const uint8_t *buf, ssize_t n) {
             text[p.payload_len] = '\0';
             printf("\r\033[K[#%u] %s\n", p.seq_num, text);
             expected++;
-            while (!gbn && rhave[expected % 64]) {            /* buffered messages that are now in order */
-                printf("\r\033[K[#%u] %s\n", expected, rbuf[expected % 64]);
-                rhave[expected % 64] = 0; expected++;
+            while (!gbn && rhave[expected % SRW]) {            /* buffered messages that are now in order */
+                printf("\r\033[K[#%u] %s\n", expected, rbuf[expected % SRW]);
+                rhave[expected % SRW] = 0; expected++;
             }
         } else if (p.seq_num < expected) {
             printf("      [duplicate #%u discarded]\n", p.seq_num);
-        } else if (!gbn && p.seq_num < expected + 64) {
-            memcpy(rbuf[p.seq_num % 64], p.payload, p.payload_len); rbuf[p.seq_num % 64][p.payload_len] = '\0';
-            rhave[p.seq_num % 64] = 1;
+        } else if (!gbn && p.seq_num < expected + SRW) {
+            memcpy(rbuf[p.seq_num % SRW], p.payload, p.payload_len); rbuf[p.seq_num % SRW][p.payload_len] = '\0';
+            rhave[p.seq_num % SRW] = 1;
             printf("      [out of order: buffered #%u, expected #%u]\n", p.seq_num, expected);
         } else {
             printf("      [out of order: got #%u, expected #%u, discarded]\n", p.seq_num, expected);
         }
         if (gbn) tx(FLAG_ACK, 0, expected, NULL, 0);
         else {
-            uint64_t bits = 0; uint8_t bm[8];
-            for (uint32_t j = 1; j < 64; j++) if (rhave[(expected + j) % 64]) bits |= 1ULL << j;
-            for (int k = 0; k < 8; k++) bm[k] = (uint8_t)(bits >> (8 * (7 - k)));
-            tx_bytes(FLAG_ACK, 0, expected, bm, 8, 0);
+            uint8_t bm[SRW / 8]; memset(bm, 0, sizeof bm);
+            for (uint32_t j = 1; j < SRW; j++) if (rhave[(expected + j) % SRW]) bm[j / 8] |= (uint8_t)(1u << (j % 8));
+            tx_bytes(FLAG_ACK, 0, expected, bm, SRW / 8, 0);
         }
     }
 }
@@ -186,6 +185,7 @@ int main(int argc, char **argv) {
     my_name = argv[3];
     if (argc > 4) loss_percent = atoi(argv[4]);
     srand((unsigned)time(NULL) ^ (unsigned)getpid());
+    setvbuf(stdin, NULL, _IONBF, 0);   /* select() must see every pending line: stdio read-ahead made piped or pasted input crawl at 20 lines/s */
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     struct sockaddr_in me;

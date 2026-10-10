@@ -26,5 +26,6 @@ for variant in "sr:./bin/server" "gbn:./bin/server_gbn"; do
   done
   kill $SP 2>/dev/null; wait $SP 2>/dev/null
 done
+step "web gateway <-> terminal chat interop (256-packet SR window, 32-byte bitmap, CRC-16), 20% loss both ways"; bash tests/chat_interop.sh || fail=1
 step "simulator and controllers"; python3 tests/test_sim.py || fail=1
 echo; [ $fail = 0 ] && echo "ALL TESTS PASSED" || echo "SOME TESTS FAILED"; exit $fail

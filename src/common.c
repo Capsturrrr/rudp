@@ -2,33 +2,24 @@
 #include <stdio.h>
 #include "common.h"
 
+/* CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) over seq, ack, flags, payload_len and payload, in wire order.
+   The first versions used a plain byte sum, which cannot detect swapped or compensating bytes (see tests/fuzz_unpack.c);
+   the field is still 16 bits, so the header layout and all tools that parse it are unchanged. */
+static uint16_t crc16_byte(uint16_t crc, uint8_t b) {
+    crc ^= (uint16_t)b << 8;
+    for (int k = 0; k < 8; k++) crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    return crc;
+}
+
 uint16_t rudp_checksum(const rudp_packet_t *pkt) {
-    uint32_t sum = 0;
-
-    sum += (pkt->seq_num >> 24) & 0xFF;
-    sum += (pkt->seq_num >> 16) & 0xFF;
-    sum += (pkt->seq_num >> 8)  & 0xFF;
-    sum += (pkt->seq_num)       & 0xFF;
-
-    sum += (pkt->ack_num >> 24) & 0xFF;
-    sum += (pkt->ack_num >> 16) & 0xFF;
-    sum += (pkt->ack_num >> 8)  & 0xFF;
-    sum += (pkt->ack_num)       & 0xFF;
-
-    sum += pkt->flags;
-
-    sum += (pkt->payload_len >> 8) & 0xFF;
-    sum += (pkt->payload_len)      & 0xFF;
-
-    for (uint16_t i = 0; i < pkt->payload_len; i++) {
-        sum += pkt->payload[i];
-    }
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    return (uint16_t)(~sum & 0xFFFF);
+    uint16_t crc = 0xFFFF;
+    for (int sh = 24; sh >= 0; sh -= 8) crc = crc16_byte(crc, (uint8_t)(pkt->seq_num >> sh));
+    for (int sh = 24; sh >= 0; sh -= 8) crc = crc16_byte(crc, (uint8_t)(pkt->ack_num >> sh));
+    crc = crc16_byte(crc, pkt->flags);
+    crc = crc16_byte(crc, (uint8_t)(pkt->payload_len >> 8));
+    crc = crc16_byte(crc, (uint8_t)pkt->payload_len);
+    for (uint16_t i = 0; i < pkt->payload_len; i++) crc = crc16_byte(crc, pkt->payload[i]);
+    return crc;
 }
 
 int rudp_pack(const rudp_packet_t *pkt, uint8_t *buf, size_t buf_size) {

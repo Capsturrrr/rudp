@@ -56,3 +56,10 @@ test:
 demo: test
 	@echo; echo 'Demos: see docs/CHAT_ONLINE.txt and docs/RUDP_Demo_Runbook.html'
 .PHONY: demo
+
+# Sanitizer build + fuzzer for the parser:  make fuzz
+fuzz:
+	mkdir -p $(BIN_DIR)
+	$(CC) -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -o $(BIN_DIR)/fuzz_unpack tests/fuzz_unpack.c $(COMMON_SRC)
+	$(BIN_DIR)/fuzz_unpack 1000000
+.PHONY: fuzz

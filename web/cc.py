@@ -6,7 +6,8 @@ All time is passed in, so the same code runs in real time and in a simulator.
 import math, os, random
 
 RL_MULT = [0.5, 0.85, 1.0, 1.15, 1.5]
-CWND_MAX = 32.0
+CWND_MAX = 32.0   # feature normalisation (matches the C agent)
+CAP = 32.0        # window ceiling; the gateway raises it to 128 like smart_client
 INIT_CWND = 10.0          # RFC 6928 initial window; used by BOTH aimd and smart for a fair comparison
 FIXED_WINDOW = 8
 
@@ -63,7 +64,7 @@ class Controller:
     def reset(self, mode=None):
         if mode: self.mode = mode
         self.cwnd = float(FIXED_WINDOW) if self.mode == "fixed" else INIT_CWND
-        self.ssthresh = 16.0
+        self.ssthresh = CAP if CAP > 32 else 16.0
         self.srtt = self.min_rtt = None
         self.iv_start = None
         self.iv_new = self.iv_lossev = self.iv_acked = 0
@@ -94,7 +95,7 @@ class Controller:
             self.min_rtt = r if self.min_rtt is None else min(self.min_rtt, r)
         if self.mode == "aimd" or self.guard > 0:
             for _ in range(n_acked):
-                self.cwnd = min(CWND_MAX, self.cwnd + (1.0 if self.cwnd < self.ssthresh else 1.0 / self.cwnd))
+                self.cwnd = min(CAP, self.cwnd + (1.0 if self.cwnd < self.ssthresh else 1.0 / self.cwnd))
 
     def on_loss(self, kind):
         self.iv_lossev += 1
@@ -153,6 +154,6 @@ class Controller:
             else: a = max(allowed, key=lambda k: self.q[st][k])
             self.last_sa = (st, a)
             self.hist = (self.hist + [(st, a)])[-2:]
-        self.cwnd = max(2.0, min(CWND_MAX, self.cwnd * RL_MULT[a]))
+        self.cwnd = max(2.0, min(CAP, self.cwnd * RL_MULT[a]))
         self.last_action = f"x{RL_MULT[a]}"
         self.note = f"{self.mode}: rtt x{ratio:.1f}, loss {loss*100:.0f}%, cwnd -> {self.cwnd:.1f} ({self.last_action})"

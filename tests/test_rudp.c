@@ -24,6 +24,10 @@ int main(void) {
     CHECK(rudp_unpack(buf, 5, &b) != 0, "a truncated packet is rejected");
     a.payload_len = MAX_PAYLOAD + 1;
     CHECK(rudp_pack(&a, buf, sizeof buf) < 0, "an oversize payload is refused");
+    { /* the checksum is CRC-16/CCITT-FALSE: swapping two payload bytes (invisible to a byte sum) must be caught */
+      rudp_packet_t c; memset(&c, 0, sizeof c); c.flags = FLAG_DATA; c.payload_len = 4; memcpy(c.payload, "ABCD", 4);
+      uint8_t cb[64]; int cn = rudp_pack(&c, cb, sizeof cb); uint8_t t = cb[RUDP_HEADER_SIZE]; cb[RUDP_HEADER_SIZE] = cb[RUDP_HEADER_SIZE + 1]; cb[RUDP_HEADER_SIZE + 1] = t;
+      CHECK(rudp_unpack(cb, (size_t)cn, &b) != 0, "swapped payload bytes are rejected (CRC, not a byte sum)"); }
     memset(&a, 0, sizeof a); a.flags = FLAG_SYN;
     n = rudp_pack(&a, buf, sizeof buf);
     CHECK(n == RUDP_HEADER_SIZE && rudp_unpack(buf, (size_t)n, &b) == 0 && b.flags == FLAG_SYN, "an empty SYN round-trips");
