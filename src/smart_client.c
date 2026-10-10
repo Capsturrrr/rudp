@@ -103,7 +103,7 @@ static double rev_path(double now) {
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
     int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1;
-    int use_sack = 1; double hyb = 0.0; int guard = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
+    int use_sack = 1; double hyb = -1.0, ss0 = 16.0; int guard = 0, cap_set = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
         if (ARG("--mode")) mode = argv[++i];
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
         else if (ARG("--trace")) trace = argv[++i];
         else if (ARG("--emu")) emu = atoi(argv[++i]);
         else if (ARG("--scenario")) scenario = argv[++i];
-        else if (ARG("--maxcwnd")) maxcwnd = atof(argv[++i]);
+        else if (ARG("--maxcwnd")) { maxcwnd = atof(argv[++i]); cap_set = 1; }
         else if (ARG("--pcap")) pcapp = argv[++i];
         else if (ARG("--ref")) ref = atof(argv[++i]);
         else if (ARG("--reorder")) reorder = atoi(argv[++i]);
@@ -129,14 +129,19 @@ int main(int argc, char **argv) {
         else if (ARG("--gbn")) use_sack = 0;   /* old Go-Back-N behaviour (use with a server built with -DRUDP_GBN) */
         else if (ARG("--init")) init_cwnd = atof(argv[++i]);
         else if (ARG("--tcut")) tcut = atof(argv[++i]);
+        else if (ARG("--ssthresh")) ss0 = atof(argv[++i]);   /* initial slow-start threshold (default 16, the original value) */
         else if (ARG("--hybrid")) hyb = atof(argv[++i]);   /* agent hands control to AIMD while the per-interval loss fraction is >= X (e.g. 0.05) */
         else if (ARG("--dfile")) dfile = argv[++i];
         else { fprintf(stderr, "bad arg %s\n", argv[i]); return 2; }
     }
+    int use_cubic = !strcmp(mode, "cubic");   /* CUBIC window growth (Ha, Rhee, Xu 2008), loss response x0.7 */
     int use_rl = !strcmp(mode, "rl");
     int use_deep = !strcmp(mode, "deep"), use_rl2 = !strcmp(mode, "rl2"), chat = use_deep || use_rl2;
-    if (chat && maxcwnd > 32) maxcwnd = 32;
-    if (use_sack && maxcwnd > 60) maxcwnd = 60;   /* the receiver buffers a 64-packet window */
+    if (use_rl2 && !cap_set && maxcwnd > 32) maxcwnd = 32;   /* the table agent expects a cap of 32 */
+    int classic = getenv("RUDP_CLASSIC") != NULL;               /* RUDP_CLASSIC=1: the original agent settings (cap 32, no hand-over) used by the older evaluation scripts */
+    if (use_deep && !cap_set) maxcwnd = classic ? 32 : 128;                /* performance default for the neural agent (it was trained with a cap of 32 but generalises; see eval_perf2.sh) */
+    if (use_deep && hyb < 0) hyb = classic ? 0.0 : 0.10;                     /* performance default: hand over to AIMD under heavy loss; --hybrid 0 turns it off */
+    if (use_sack && maxcwnd > 250) maxcwnd = 250;   /* the receiver buffers a 256-packet window */
     if (init_cwnd < 0) init_cwnd = chat ? 10.0 : 1.0;
     deep_net_t dnet; if (use_deep && (!dfile || deep_load(&dnet, dfile) != 0)) { fprintf(stderr, "need --dfile with the exported network\n"); return 2; }
     if (npk > MAXN) npk = MAXN;
@@ -194,7 +199,7 @@ int main(int argc, char **argv) {
 
     /* ---- sender state ---- */
     int base = 0, next = 0, dup = 0, recover = -1; uint32_t last_ack = 0;
-    double cwnd = init_cwnd, ssthresh = 16.0, srtt = -1, rttvar = 0, rto = 1000;
+    double wmax = 0, kcub = 0, epoch = -1; double cwnd = init_cwnd, ssthresh = ss0, srtt = -1, rttvar = 0, rto = 1000;
     double min_rtt = 1e9, rtt_sum = 0, dev_floor = 1e9; long rtt_n = 0;
     long tx_total = 0, retx = 0, timeouts = 0, fast_retx = 0;
     double timer_start = 0; int timer_on = 0;
@@ -236,9 +241,8 @@ int main(int argc, char **argv) {
             pcap_write(now, 0, port, p->buf, p->len); rev.head++;
             if (!okp || !(ack.flags & FLAG_ACK)) continue;
             uint32_t a = ack.ack_num;
-            if (use_sack && ack.payload_len == 8) {
-                uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | ack.payload[k];
-                for (int j = 1; j < 64; j++) if (bits >> j & 1) { long ix = (long)(a + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < npk) sacked[ix] = 1; }
+            if (use_sack && ack.payload_len == 32) {      /* 256-packet receive window: bit j = packet a + j is held */
+                for (int j = 1; j < 256; j++) if (ack.payload[j / 8] >> (j % 8) & 1) { long ix = (long)(a + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < npk) sacked[ix] = 1; }
             }
             if (a > pk[base].seq_num) {
                 int nb = base;
@@ -256,7 +260,12 @@ int main(int argc, char **argv) {
                 iv_acked += newly; base = nb; dup = 0; last_ack = a;
                 if ((!use_rl && !chat) || guard > 0) {
                     for (int k = 0; k < newly; k++) {
-                        if (cwnd < ssthresh) cwnd += 1.0; else cwnd += 1.0 / cwnd;
+                        if (cwnd < ssthresh) cwnd += 1.0;
+                        else if (use_cubic) {
+                            if (epoch < 0) { epoch = now; wmax = cwnd; kcub = 0; }
+                            double tt = (now - epoch) / 1000.0, tg = 0.4 * pow(tt - kcub, 3) + wmax;
+                            cwnd += tg > cwnd ? (tg - cwnd) / cwnd : 0.01 / cwnd;
+                        } else cwnd += 1.0 / cwnd;
                     }
                     if (cwnd > maxcwnd) cwnd = maxcwnd;
                 }
@@ -267,7 +276,8 @@ int main(int argc, char **argv) {
                 if (dup >= DUP_ACK_THRESHOLD && base > recover) {
                     recover = next - 1; fast_retx++; iv_lossev++;
                     if ((!use_rl && !chat) || guard > 0) {
-                        ssthresh = cwnd / 2; if (ssthresh < 1) ssthresh = 1; cwnd = ssthresh;
+                        if (use_cubic) { wmax = cwnd; ssthresh = cwnd * 0.7; if (ssthresh < 2) ssthresh = 2; cwnd = ssthresh; kcub = cbrt(wmax * 0.3 / 0.4); epoch = now; }
+                        else { ssthresh = cwnd / 2; if (ssthresh < 1) ssthresh = 1; cwnd = ssthresh; }
                     }
                     { int hi = next; if (use_sack) { hi = base + 1; for (int i = base; i < next; i++) if (sacked[i]) hi = i; }
                       for (int i = base; i < hi; i++) if (!(use_sack && sacked[i])) TX(i, 1); }
@@ -287,7 +297,8 @@ int main(int argc, char **argv) {
             /* penalise once per loss event; in Selective Repeat several packets can expire inside one event */
             if (!use_sack || first_exp > recover) {
                 timeouts++; iv_lossev++;
-                ssthresh = cwnd / 2; if (ssthresh < 2) ssthresh = 2;
+                if (use_cubic) { wmax = cwnd; ssthresh = cwnd * 0.7; kcub = cbrt(wmax * 0.3 / 0.4); epoch = now; } else ssthresh = cwnd / 2;
+                if (ssthresh < 2) ssthresh = 2;
                 if (chat && guard > 0) { cwnd = 1.0; /* hybrid: AIMD is in control */ } else if (chat) { /* the chat-style agents leave the window to the policy; --tcut X adds an AIMD-style safety net: window x X on a timeout */ if (tcut > 0) { cwnd *= tcut; if (cwnd < 2) cwnd = 2; } } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
                 rto = rto * 2 > 3000 ? 3000 : rto * 2;
                 recover = next - 1;

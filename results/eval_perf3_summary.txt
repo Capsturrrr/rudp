@@ -1,0 +1,25 @@
+5g     aimd_old   n=10    1.30 s +/-  0.12  sent   1202 retx     2
+5g     aimd_128   n=10    1.09 s +/-  0.13  sent   1244 retx    44   <- fastest
+5g     deep_new   n=10    1.09 s +/-  0.05  sent   1206 retx     6
+lossy  aimd_old   n=10    8.44 s +/-  0.72  sent   1230 retx    30
+lossy  aimd_128   n=10    8.27 s +/-  0.54  sent   1241 retx    41
+lossy  deep_new   n=10    4.52 s +/-  0.55  sent   1271 retx    71   <- fastest
+sat    aimd_old   n=10   25.13 s +/-  2.94  sent   1212 retx    12
+sat    aimd_128   n=10   20.04 s +/-  4.19  sent   1241 retx    41
+sat    deep_new   n=10    6.32 s +/-  0.42  sent   1277 retx    77   <- fastest
+fast   aimd_old   n=10   19.79 s +/-  1.08  sent   3020 retx    20
+fast   aimd_128   n=10   17.29 s +/-  1.43  sent   3044 retx    44
+fast   deep_new   n=10    4.01 s +/-  0.22  sent   3262 retx   262   <- fastest
+bad    aimd_old   n= 5    7.53 s +/-  1.10  sent    331 retx    31
+bad    aimd_128   n= 5    8.51 s +/-  1.70  sent    335 retx    35
+bad    deep_new   n= 5    5.89 s +/-  2.50  sent    332 retx    32   <- fastest
+       5g: deep_new - aimd_old: -0.21 s +/- 0.11 (significant), -16%
+       5g: deep_new - aimd_128: +0.00 s +/- 0.11 (not significant), +0%
+       lossy: deep_new - aimd_old: -3.92 s +/- 0.60 (significant), -46%
+       lossy: deep_new - aimd_128: -3.76 s +/- 0.70 (significant), -45%
+       sat: deep_new - aimd_old: -18.81 s +/- 2.97 (significant), -75%
+       sat: deep_new - aimd_128: -13.72 s +/- 4.12 (significant), -68%
+       fast: deep_new - aimd_old: -15.78 s +/- 1.02 (significant), -80%
+       fast: deep_new - aimd_128: -13.28 s +/- 1.36 (significant), -77%
+       bad: deep_new - aimd_old: -1.63 s +/- 3.23 (not significant), -22%
+       bad: deep_new - aimd_128: -2.61 s +/- 3.27 (not significant), -31%

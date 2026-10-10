@@ -2,6 +2,8 @@
 # AIMD (cap 32) vs the neural agent with and without the timeout safety net (--tcut 0.25), plus a hostile 10%-loss scenario.
 # (Go-Back-N era: the transport was Go-Back-N when this was run; the script now pins it with -DRUDP_GBN and --gbn.)
 # usage: bash eval_ci5.sh [runs] -> results/eval_ci5_<scenario>.csv ; summarise with python3 ci_summary5.py
+export RUDP_CLASSIC=1   # keep the original agent settings (cap 32, no hand-over) so these results stay reproducible
+export RUDP_CLASSIC=1
 cd "$(dirname "$0")"; RUNS=${1:-10}
 declare -A P
 P[5g]="--delay 10 --jitter 3 --loss 0.2 --rate 1500 --queue 60"

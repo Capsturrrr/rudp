@@ -1,6 +1,8 @@
 #!/bin/bash
 # Go-Back-N reference arms for eval_ci3.sh, against the PLAIN server (eval_ci3.sh's sack0 arms used the SACK-capable server).
 # usage: bash eval_ci3b.sh [runs] -> results/eval_ci3b_<scenario>.csv
+export RUDP_CLASSIC=1   # keep the original agent settings (cap 32, no hand-over) so these results stay reproducible
+export RUDP_CLASSIC=1
 cd "$(dirname "$0")"; RUNS=${1:-8}
 declare -A P
 P[5g]="--delay 10 --jitter 3 --loss 0.2 --rate 1500 --queue 60"

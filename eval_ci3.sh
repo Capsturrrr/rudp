@@ -2,6 +2,8 @@
 # Selective ACK in the C transport: AIMD and the neural agent, with and without SACK, plus a reordering path.
 # Scenarios run one after another so CPU load does not distort the timings.
 # usage: bash eval_ci3.sh [runs]  -> results/eval_ci3_<scenario>.csv ; summarise with python3 ci_summary3.py
+export RUDP_CLASSIC=1   # keep the original agent settings (cap 32, no hand-over) so these results stay reproducible
+export RUDP_CLASSIC=1
 cd "$(dirname "$0")"; RUNS=${1:-10}
 declare -A P
 P[5g]="--delay 10 --jitter 3 --loss 0.2 --rate 1500 --queue 60"

@@ -3,6 +3,8 @@
 # the first neural agent (trained in the permissive simulator) and the retrained one (realistic fast-retransmit rule).
 # (Go-Back-N era: the transport was Go-Back-N when this was run; the script now pins it with -DRUDP_GBN and --gbn.)
 # usage: bash eval_ci4.sh [runs] -> results/eval_ci4_<scenario>.csv ; summarise with python3 ci_summary4.py
+export RUDP_CLASSIC=1   # keep the original agent settings (cap 32, no hand-over) so these results stay reproducible
+export RUDP_CLASSIC=1
 cd "$(dirname "$0")"; RUNS=${1:-10}
 declare -A P
 P[5g]="--delay 10 --jitter 3 --loss 0.2 --rate 1500 --queue 60"

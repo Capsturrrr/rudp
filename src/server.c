@@ -60,7 +60,8 @@ int main(void) {
     socklen_t client_len = sizeof(client_addr);
     uint8_t recv_buf[BUFFER_SIZE];
 #ifndef RUDP_GBN
-    uint64_t sack_bits = 0; static uint8_t sack_buf[64][MAX_PAYLOAD]; static uint16_t sack_len[64];
+    enum { SRW = 256 };   /* receive window: 256 packets, reported as a 32-byte bitmap */
+    static uint8_t sack_have[SRW]; static uint8_t sack_buf[SRW][MAX_PAYLOAD]; static uint16_t sack_len[SRW];
 #endif
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -145,20 +146,20 @@ int main(void) {
                     reassembled_len += pkt.payload_len;
                 }
                 printf("ACCEPTED seq=%u (%u bytes)\n", pkt.seq_num, pkt.payload_len);
-                expected_seq++; sack_bits >>= 1;
-                while (sack_bits & 1) {                 /* buffered packets that are now in order */
-                    int slot = (int)(expected_seq % 64);
+                expected_seq++;
+                while (sack_have[expected_seq % SRW]) {          /* buffered packets that are now in order */
+                    int slot = (int)(expected_seq % SRW);
                     if (reassembled_len + sack_len[slot] < sizeof(reassembled)) {
                         memcpy(reassembled + reassembled_len, sack_buf[slot], sack_len[slot]);
                         reassembled_len += sack_len[slot];
                     }
-                    expected_seq++; sack_bits >>= 1;
+                    sack_have[slot] = 0; expected_seq++;
                 }
-            } else if (pkt.seq_num > expected_seq && pkt.seq_num - expected_seq < 64) {
-                int slot = (int)(pkt.seq_num % 64);
-                if (!(sack_bits & (1ULL << (pkt.seq_num - expected_seq)))) {
+            } else if (pkt.seq_num > expected_seq && pkt.seq_num - expected_seq < SRW) {
+                int slot = (int)(pkt.seq_num % SRW);
+                if (!sack_have[slot]) {
                     memcpy(sack_buf[slot], pkt.payload, pkt.payload_len); sack_len[slot] = pkt.payload_len;
-                    sack_bits |= 1ULL << (pkt.seq_num - expected_seq);
+                    sack_have[slot] = 1;
                 }
                 printf("BUFFERED seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
             } else {
@@ -170,8 +171,8 @@ int main(void) {
                 ack.seq_num = server_seq;
                 ack.ack_num = expected_seq;
                 ack.flags = FLAG_ACK;
-                ack.payload_len = 8;
-                for (int k = 0; k < 8; k++) ack.payload[k] = (uint8_t)(sack_bits >> (8 * (7 - k)));
+                ack.payload_len = SRW / 8;                       /* bit j set = packet expected_seq + j is held */
+                for (int j = 1; j < SRW; j++) if (sack_have[(expected_seq + (uint32_t)j) % SRW]) ack.payload[j / 8] |= (uint8_t)(1u << (j % 8));
                 send_packet(sockfd, &ack, &client_addr, client_len);
                 printf("  -> ACK %u + sack bitmap\n\n", expected_seq);
             }

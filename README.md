@@ -33,6 +33,8 @@ The receiver buffers out-of-order packets (64-packet window) and puts a bitmap o
 
 ## Smart-RUDP (learning-based congestion control)
 
+Performance defaults: the neural agent runs with a window cap of 128 and an AIMD hand-over at 10% loss (`--maxcwnd 32 --hybrid 0` or `RUDP_CLASSIC=1` for the original settings); the receive window is 256 packets. Evidence: `eval_perf*.sh`, `results/eval_perf3_summary.txt`.
+
 ```bash
 make smart                      # builds bin/server and bin/smart_client
 ./run_experiments.sh            # trains 40 episodes, evaluates 6 runs per scenario

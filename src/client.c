@@ -221,11 +221,9 @@ int main(int argc, char *argv[]) {
         if (n > 0 && rudp_unpack(recv_buf, (size_t)n, &ack) == 0 && (ack.flags & FLAG_ACK)) {
             uint32_t acked_seq = ack.ack_num;
             uint32_t base_pkt_seq = packets[base].seq_num;
-            if (selective && ack.payload_len == 8) {
-                uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | ack.payload[k];
-                for (int j = 1; j < 64; j++) if ((bits >> j) & 1) { long ix = (long)(acked_seq + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < total_packets) sacked[ix] = 1; }
+            if (selective && ack.payload_len == 32) {
+                for (int j = 1; j < 256; j++) if (ack.payload[j / 8] >> (j % 8) & 1) { long ix = (long)(acked_seq + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < total_packets) sacked[ix] = 1; }
             }
-
             if (acked_seq > base_pkt_seq) {
                 while (base < total_packets && packets[base].seq_num < acked_seq) base++;
 
