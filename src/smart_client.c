@@ -5,7 +5,7 @@
  *   --mode rl2  : the chat-style table agent (no-shrink rule, window cap 32, decisions every 100-500 ms)
  *   --mode deep : the neural agent (deep_cc.h), same decision loop as rl2
  *   --reorder 1 : let jitter reorder packets on the emulated forward path
- *   --sack 1    : selective retransmit using the SACK bitmap in the ACKs (needs a server built with -DRUDP_SACK)
+ *   --sack 1    : Selective Repeat (default): resend only holes, using the bitmap in the ACKs; --gbn restores Go-Back-N (server built with -DRUDP_GBN)
  *   --init N    : initial window (default 1; the chat-style modes default to 10)
  * Both modes share the same reliability machinery (Go-Back-N, adaptive RTO,
  * dup-ACK fast retransmit that resends the window) so only the cwnd policy differs.
@@ -103,7 +103,7 @@ static double rev_path(double now) {
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
     int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1;
-    int use_sack = 0; double hyb = 0.0; int guard = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
+    int use_sack = 1; double hyb = 0.0; int guard = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
         if (ARG("--mode")) mode = argv[++i];
@@ -126,6 +126,7 @@ int main(int argc, char **argv) {
         else if (ARG("--ref")) ref = atof(argv[++i]);
         else if (ARG("--reorder")) reorder = atoi(argv[++i]);
         else if (ARG("--sack")) use_sack = atoi(argv[++i]);
+        else if (ARG("--gbn")) use_sack = 0;   /* old Go-Back-N behaviour (use with a server built with -DRUDP_GBN) */
         else if (ARG("--init")) init_cwnd = atof(argv[++i]);
         else if (ARG("--tcut")) tcut = atof(argv[++i]);
         else if (ARG("--hybrid")) hyb = atof(argv[++i]);   /* agent hands control to AIMD while the per-interval loss fraction is >= X (e.g. 0.05) */
@@ -135,6 +136,7 @@ int main(int argc, char **argv) {
     int use_rl = !strcmp(mode, "rl");
     int use_deep = !strcmp(mode, "deep"), use_rl2 = !strcmp(mode, "rl2"), chat = use_deep || use_rl2;
     if (chat && maxcwnd > 32) maxcwnd = 32;
+    if (use_sack && maxcwnd > 60) maxcwnd = 60;   /* the receiver buffers a 64-packet window */
     if (init_cwnd < 0) init_cwnd = chat ? 10.0 : 1.0;
     deep_net_t dnet; if (use_deep && (!dfile || deep_load(&dnet, dfile) != 0)) { fprintf(stderr, "need --dfile with the exported network\n"); return 2; }
     if (npk > MAXN) npk = MAXN;
@@ -275,13 +277,25 @@ int main(int argc, char **argv) {
             } else last_ack = a;
         }
         /* 4. RTO */
-        if (timer_on && base < npk && now - timer_start >= rto) {
-            timeouts++; iv_lossev++;
-            ssthresh = cwnd / 2; if (ssthresh < 2) ssthresh = 2;
-            if (chat && guard > 0) { cwnd = 1.0; /* hybrid: AIMD is in control */ } else if (chat) { /* the chat-style agents leave the window to the policy; --tcut X adds an AIMD-style safety net: window x X on a timeout */ if (tcut > 0) { cwnd *= tcut; if (cwnd < 2) cwnd = 2; } } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
-            rto = rto * 2 > 3000 ? 3000 : rto * 2;
-            recover = next - 1; dup = 0;
-            for (int i = base; i < next; i++) if (!(use_sack && sacked[i])) TX(i, 1);
+        int rto_fire = timer_on && base < npk && now - timer_start >= rto; int first_exp = base;
+        if (use_sack && base < npk) {           /* Selective Repeat: every packet has its own timer */
+            rto_fire = 0;
+            for (int i = base; i < next; i++) if (!sacked[i] && now - sent_at[i] >= rto) { rto_fire = 1; first_exp = i; break; }
+        }
+        if (rto_fire) {
+            double rto_old = rto;
+            /* penalise once per loss event; in Selective Repeat several packets can expire inside one event */
+            if (!use_sack || first_exp > recover) {
+                timeouts++; iv_lossev++;
+                ssthresh = cwnd / 2; if (ssthresh < 2) ssthresh = 2;
+                if (chat && guard > 0) { cwnd = 1.0; /* hybrid: AIMD is in control */ } else if (chat) { /* the chat-style agents leave the window to the policy; --tcut X adds an AIMD-style safety net: window x X on a timeout */ if (tcut > 0) { cwnd *= tcut; if (cwnd < 2) cwnd = 2; } } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
+                rto = rto * 2 > 3000 ? 3000 : rto * 2;
+                recover = next - 1;
+            }
+            dup = 0;
+            if (use_sack) { /* resend only the packets whose own timer has expired and that the receiver has not reported */
+                for (int i = base; i < next; i++) if (!sacked[i] && now - sent_at[i] >= rto_old) TX(i, 1);
+            } else for (int i = base; i < next; i++) TX(i, 1);
             timer_start = now;
             if (tr) fprintf(tr, "%.1f,TIMEOUT,%.2f,%.1f\n", now - t0, cwnd, srtt);
         }

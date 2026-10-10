@@ -27,6 +27,10 @@ Extensions (done):
 
 Still to do: case study + video submission (due 21st Oct).
 
+## Selective Repeat is the default
+
+The receiver buffers out-of-order packets (64-packet window) and puts a bitmap of what it holds in every ACK; the sender keeps one timer per packet and resends only the missing ones. Go-Back-N is kept for comparison: `--gbn` (smart_client, gateway), `RUDP_GBN=1` (client, chat), `make server_gbn` / `-DRUDP_GBN` (server). Evidence: `eval_ci7.sh`, `results/eval_ci7_summary.txt`; earlier `eval_ci*` results were Go-Back-N.
+
 ## Smart-RUDP (learning-based congestion control)
 
 ```bash

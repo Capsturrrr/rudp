@@ -53,6 +53,12 @@ static long recover = -1;   /* highest seq outstanding at the last retransmit; n
 /* receiver state */
 static uint32_t expected = 0;
 
+/* Selective Repeat (default; RUDP_GBN=1 restores Go-Back-N): the receiver buffers a 64-message window of out-of-order
+   messages and reports them in an 8-byte bitmap inside every ACK; the sender keeps one timer per message. */
+static int gbn = 0;
+static uint8_t sacked[MAX_MSGS];
+static char rbuf[64][MSG_MAX + 1]; static uint8_t rhave[64];
+
 static unsigned long n_sent = 0, n_dropped = 0, n_retx = 0;
 
 static long long now_ms(void) {
@@ -61,15 +67,15 @@ static long long now_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static void tx(uint8_t flags, uint32_t seq, uint32_t ack, const char *text, int is_retx) {
+static void tx_bytes(uint8_t flags, uint32_t seq, uint32_t ack, const uint8_t *data, int dlen, int is_retx) {
     rudp_packet_t p;
     memset(&p, 0, sizeof(p));
     p.seq_num = seq;
     p.ack_num = ack;
     p.flags = flags;
-    if (text) {
-        p.payload_len = (uint16_t)strlen(text);
-        memcpy(p.payload, text, p.payload_len);
+    if (data && dlen > 0) {
+        p.payload_len = (uint16_t)dlen;
+        memcpy(p.payload, data, p.payload_len);
     }
     uint8_t buf[BUFFER_SIZE + MAX_PAYLOAD];
     int len = rudp_pack(&p, buf, sizeof(buf));
@@ -85,10 +91,24 @@ static void tx(uint8_t flags, uint32_t seq, uint32_t ack, const char *text, int 
     sendto(sockfd, buf, (size_t)len, 0, (struct sockaddr *)&peer_addr, sizeof(peer_addr));
 }
 
+static void tx(uint8_t flags, uint32_t seq, uint32_t ack, const char *text, int is_retx) {
+    tx_bytes(flags, seq, ack, (const uint8_t *)text, text ? (int)strlen(text) : 0, is_retx);
+}
+
 static void send_window_from(uint32_t from, int is_retx) {
     for (uint32_t s = from; s < next_seq; s++) {
         sent_at[s % MAX_MSGS] = now_ms();
         tx(FLAG_DATA | FLAG_ACK, s, expected, sendq[s % MAX_MSGS], is_retx);
+    }
+}
+
+/* Selective Repeat: resend only the unreported messages below the highest one the peer reported (or just the base) */
+static void resend_holes(void) {
+    uint32_t hi = base;
+    for (uint32_t s = base; s < next_seq; s++) if (sacked[s % MAX_MSGS]) hi = s;
+    for (uint32_t s = base; s <= hi && s < next_seq; s++) if (!sacked[s % MAX_MSGS]) {
+        sent_at[s % MAX_MSGS] = now_ms();
+        tx(FLAG_DATA | FLAG_ACK, s, expected, sendq[s % MAX_MSGS], 1);
     }
 }
 
@@ -99,19 +119,24 @@ static void handle_packet(const uint8_t *buf, ssize_t n) {
 
     /* acknowledgment part (cumulative: ack_num = next message the peer expects) */
     if (p.flags & FLAG_ACK) {
+        if (!gbn && !(p.flags & FLAG_DATA) && p.payload_len == 8) {
+            uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | p.payload[k];
+            for (int j = 1; j < 64; j++) if ((bits >> j) & 1) { uint32_t ix = p.ack_num + (uint32_t)j; if (ix >= base && ix < next_seq) sacked[ix % MAX_MSGS] = 1; }
+        }
         if (p.ack_num > base && p.ack_num <= next_seq) {
+            for (uint32_t s = base; s < p.ack_num; s++) sacked[s % MAX_MSGS] = 0;
             base = p.ack_num;
             dup_acks = 0;
         } else if (!(p.flags & FLAG_DATA) && p.ack_num == base && base < next_seq) {
             if (++dup_acks >= DUP_ACK_THRESHOLD && (long)base > recover) {
                 printf("      [3 duplicate ACKs: fast retransmit from #%u]\n", base);
-                send_window_from(base, 1);
+                if (gbn) send_window_from(base, 1); else resend_holes();
                 recover = (long)next_seq - 1; dup_acks = 0;
             }
         }
     }
 
-    /* data part: deliver in order, otherwise re-ACK what we expect */
+    /* data part: deliver in order; Selective Repeat buffers out-of-order messages instead of discarding them */
     if (p.flags & FLAG_DATA) {
         if (p.seq_num == expected) {
             char text[MSG_MAX + 1];
@@ -119,11 +144,26 @@ static void handle_packet(const uint8_t *buf, ssize_t n) {
             text[p.payload_len] = '\0';
             printf("\r\033[K[#%u] %s\n", p.seq_num, text);
             expected++;
+            while (!gbn && rhave[expected % 64]) {            /* buffered messages that are now in order */
+                printf("\r\033[K[#%u] %s\n", expected, rbuf[expected % 64]);
+                rhave[expected % 64] = 0; expected++;
+            }
+        } else if (p.seq_num < expected) {
+            printf("      [duplicate #%u discarded]\n", p.seq_num);
+        } else if (!gbn && p.seq_num < expected + 64) {
+            memcpy(rbuf[p.seq_num % 64], p.payload, p.payload_len); rbuf[p.seq_num % 64][p.payload_len] = '\0';
+            rhave[p.seq_num % 64] = 1;
+            printf("      [out of order: buffered #%u, expected #%u]\n", p.seq_num, expected);
         } else {
-            if (p.seq_num < expected) printf("      [duplicate #%u discarded]\n", p.seq_num);
-            else printf("      [out of order: got #%u, expected #%u, discarded]\n", p.seq_num, expected);
+            printf("      [out of order: got #%u, expected #%u, discarded]\n", p.seq_num, expected);
         }
-        tx(FLAG_ACK, 0, expected, NULL, 0);
+        if (gbn) tx(FLAG_ACK, 0, expected, NULL, 0);
+        else {
+            uint64_t bits = 0; uint8_t bm[8];
+            for (uint32_t j = 1; j < 64; j++) if (rhave[(expected + j) % 64]) bits |= 1ULL << j;
+            for (int k = 0; k < 8; k++) bm[k] = (uint8_t)(bits >> (8 * (7 - k)));
+            tx_bytes(FLAG_ACK, 0, expected, bm, 8, 0);
+        }
     }
 }
 
@@ -132,6 +172,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s <my_port> <peer_port> <name> [loss_percent]\n", argv[0]);
         return 1;
     }
+    gbn = getenv("RUDP_GBN") != NULL;
     int my_port = atoi(argv[1]), peer_port;
     char peer_ip[64] = "127.0.0.1";
     const char *colon = strrchr(argv[2], ':');
@@ -207,11 +248,17 @@ int main(int argc, char **argv) {
             }
         }
         /* timeout: Go-Back-N resend of everything unacknowledged */
-        if (base < next_seq && now_ms() - sent_at[base % MAX_MSGS] > CHAT_TIMEOUT_MS) {
+        if (gbn && base < next_seq && now_ms() - sent_at[base % MAX_MSGS] > CHAT_TIMEOUT_MS) {
             printf("      [timeout: resending #%u..#%u]\n", base, next_seq - 1);
             send_window_from(base, 1);
             recover = (long)next_seq - 1;
         }
+        if (!gbn) for (uint32_t s = base; s < next_seq; s++)        /* Selective Repeat: one timer per message */
+            if (!sacked[s % MAX_MSGS] && now_ms() - sent_at[s % MAX_MSGS] > CHAT_TIMEOUT_MS) {
+                printf("      [timeout: resending only #%u]\n", s);
+                sent_at[s % MAX_MSGS] = now_ms();
+                tx(FLAG_DATA | FLAG_ACK, s, expected, sendq[s % MAX_MSGS], 1);
+            }
         if (!stdin_open && base >= next_seq) break;
     }
     printf("\nsent %lu packets, %lu dropped by the simulated network, %lu retransmissions, %u messages delivered to peer\n",

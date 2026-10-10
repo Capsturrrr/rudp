@@ -59,7 +59,7 @@ int main(void) {
     struct sockaddr_in server_addr, client_addr;
     socklen_t client_len = sizeof(client_addr);
     uint8_t recv_buf[BUFFER_SIZE];
-#ifdef RUDP_SACK
+#ifndef RUDP_GBN
     uint64_t sack_bits = 0; static uint8_t sack_buf[64][MAX_PAYLOAD]; static uint16_t sack_len[64];
 #endif
 
@@ -136,7 +136,7 @@ int main(void) {
                    state_name(state), expected_seq);
 
         } else if ((pkt.flags & FLAG_DATA) && state == STATE_ESTABLISHED) {
-#ifdef RUDP_SACK
+#ifndef RUDP_GBN
             /* Selective acknowledgment build: buffer out-of-order packets (64-packet window) and report them
                in an 8-byte bitmap carried in every ACK: bit j set means seq expected_seq+j was received. */
             if (pkt.seq_num == expected_seq) {

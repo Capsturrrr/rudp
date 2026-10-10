@@ -191,6 +191,11 @@ int main(int argc, char *argv[]) {
     int timer_active = 0;
     uint32_t last_ack_seen = 0;
     int dup_ack_count = 0;
+    /* Selective Repeat (default): the server buffers out-of-order packets and returns a bitmap of them in every ACK;
+       the client keeps one timer per packet and resends only what is missing. Set RUDP_GBN=1 (and build the server
+       with -DRUDP_GBN) for the original Go-Back-N behaviour. */
+    int selective = getenv("RUDP_GBN") == NULL;
+    long sent_ms[MAX_CHUNKS]; uint8_t sacked[MAX_CHUNKS]; memset(sacked, 0, sizeof sacked); memset(sent_ms, 0, sizeof sent_ms);
 
     double cwnd = INITIAL_CWND;
     double ssthresh = INITIAL_SSTHRESH;
@@ -205,6 +210,7 @@ int main(int argc, char *argv[]) {
 
         while (next_seq < total_packets && next_seq < window_limit) {
             send_packet(sockfd, &packets[next_seq], &server_addr, server_len, 1);
+            sent_ms[next_seq] = now_ms();
             if (!timer_active) { timer_start = now_ms(); timer_active = 1; }
             next_seq++;
         }
@@ -215,6 +221,10 @@ int main(int argc, char *argv[]) {
         if (n > 0 && rudp_unpack(recv_buf, (size_t)n, &ack) == 0 && (ack.flags & FLAG_ACK)) {
             uint32_t acked_seq = ack.ack_num;
             uint32_t base_pkt_seq = packets[base].seq_num;
+            if (selective && ack.payload_len == 8) {
+                uint64_t bits = 0; for (int k = 0; k < 8; k++) bits = (bits << 8) | ack.payload[k];
+                for (int j = 1; j < 64; j++) if ((bits >> j) & 1) { long ix = (long)(acked_seq + (uint32_t)j) - (long)base_seq; if (ix >= 0 && ix < total_packets) sacked[ix] = 1; }
+            }
 
             if (acked_seq > base_pkt_seq) {
                 while (base < total_packets && packets[base].seq_num < acked_seq) base++;
@@ -250,7 +260,10 @@ int main(int argc, char *argv[]) {
                            packets[base].seq_num, cwnd, ssthresh);
                     log_cwnd("FAST_RETRANSMIT", cwnd, ssthresh);
 
-                    send_packet(sockfd, &packets[base], &server_addr, server_len, 1);
+                    if (selective) { /* resend the holes below the highest packet the receiver reported */
+                        int hi = base + 1; for (int i = base; i < next_seq; i++) if (sacked[i]) hi = i;
+                        for (int i = base; i < hi; i++) if (!sacked[i]) { send_packet(sockfd, &packets[i], &server_addr, server_len, 1); sent_ms[i] = now_ms(); }
+                    } else send_packet(sockfd, &packets[base], &server_addr, server_len, 1);
                     dup_ack_count = 0;
                     timer_start = now_ms();
                 }
@@ -259,18 +272,22 @@ int main(int argc, char *argv[]) {
             }
 
         } else {
-            if (timer_active && (now_ms() - timer_start) >= TIMEOUT_MS) {
+            int expired = timer_active && (now_ms() - timer_start) >= TIMEOUT_MS;
+            if (selective) { expired = 0; for (int i = base; i < next_seq; i++) if (!sacked[i] && now_ms() - sent_ms[i] >= TIMEOUT_MS) { expired = 1; break; } }
+            if (expired) {
                 /* Timeout: harsher penalty — collapse back to slow start */
                 ssthresh = cwnd / 2.0;
                 if (ssthresh < MIN_CWND) ssthresh = MIN_CWND;
                 cwnd = INITIAL_CWND;
 
-                printf("  !! TIMEOUT — cwnd RESET to %.2f (ssthresh=%.2f), resending from base=%d\n",
+                printf("  !! TIMEOUT — cwnd RESET to %.2f (ssthresh=%.2f), resending unreported packets from base=%d\n",
                        cwnd, ssthresh, base);
                 log_cwnd("TIMEOUT", cwnd, ssthresh);
 
                 for (int i = base; i < next_seq; i++) {
+                    if (selective && (sacked[i] || now_ms() - sent_ms[i] < TIMEOUT_MS)) continue;   /* Selective Repeat: only expired, unreported packets */
                     send_packet(sockfd, &packets[i], &server_addr, server_len, 1);
+                    sent_ms[i] = now_ms();
                 }
                 timer_start = now_ms();
                 dup_ack_count = 0;

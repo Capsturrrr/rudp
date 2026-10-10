@@ -1,0 +1,20 @@
+5g     aimd32   n=10 time   1.27 s +/- 0.10   sent   1202
+5g     deep     n=10 time   1.16 s +/- 0.02   sent   1202
+5g     hyb10    n=10 time   1.16 s +/- 0.02   sent   1202
+       paired deep - aimd32: -0.11 s +/- 0.09 (significant)
+       paired hyb10 - aimd32: -0.11 s +/- 0.09 (significant)
+lossy  aimd32   n=10 time   7.99 s +/- 0.70   sent   1226
+lossy  deep     n=10 time   4.29 s +/- 0.29   sent   1260
+lossy  hyb10    n=10 time   4.29 s +/- 0.30   sent   1256
+       paired deep - aimd32: -3.69 s +/- 0.65 (significant)
+       paired hyb10 - aimd32: -3.70 s +/- 0.58 (significant)
+sat    aimd32   n=10 time  25.70 s +/- 2.82   sent   1216
+sat    deep     n=10 time  12.91 s +/- 0.26   sent   1234
+sat    hyb10    n=10 time  13.00 s +/- 0.27   sent   1217
+       paired deep - aimd32: -12.78 s +/- 2.76 (significant)
+       paired hyb10 - aimd32: -12.70 s +/- 2.83 (significant)
+bad    aimd32   n= 5 time   7.34 s +/- 1.96   sent    329
+bad    deep     n= 5 time   8.07 s +/- 6.97   sent    329
+bad    hyb10    n= 5 time   6.90 s +/- 4.09   sent    333
+       paired deep - aimd32: +0.74 s +/- 6.35 (not significant)
+       paired hyb10 - aimd32: -0.43 s +/- 3.39 (not significant)

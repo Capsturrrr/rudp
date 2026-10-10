@@ -8,10 +8,10 @@ P[lossy]="--delay 25 --jitter 10 --loss 2 --rate 800 --queue 50"
 P[sat]="--delay 150 --jitter 10 --loss 0.3 --rate 400 --queue 100"
 port=9500
 for sc in 5g lossy sat; do
-  port=$((port+1)); gcc -DSERVER_PORT=$port -o bin/server_$port src/server.c src/common.c
+  port=$((port+1)); gcc -DRUDP_GBN -DSERVER_PORT=$port -o bin/server_$port src/server.c src/common.c
   ( ./bin/server_$port >/dev/null 2>&1 & SP=$!; sleep 0.3; rm -f results/eval_ci2_$sc.csv
     for i in $(seq 1 $RUNS); do for m in aimd rl2 deep; do
-      ./bin/smart_client --mode $m --init 10 --port $port ${P[$sc]} --scenario $sc --packets 1200 --qfile results/q_chat.txt --dfile results/dqn_chat.txt --seed $((3000+i)) | grep RESULT >> results/eval_ci2_$sc.csv
+      ./bin/smart_client --gbn --mode $m --init 10 --port $port ${P[$sc]} --scenario $sc --packets 1200 --qfile results/q_chat.txt --dfile results/dqn_chat.txt --seed $((3000+i)) | grep RESULT >> results/eval_ci2_$sc.csv
     done; done; kill $SP ) &
 done
 wait; echo DONE

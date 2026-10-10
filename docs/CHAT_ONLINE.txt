@@ -48,3 +48,6 @@ Live dashboard and adaptive timeout (web chat)
    The right-hand panel plots window, packets in flight, RTT and loss for the last 60 seconds.
    Add  --rto adaptive  to either gateway for an RFC 6298 retransmission timer with backoff
    (default is the fixed 300 ms timeout). Use it on high-delay links (RTT over 300 ms).
+
+Selective Repeat is the default in the web chat and in ./bin/chat. Add --gbn (gateway) or set RUDP_GBN=1 (./bin/chat)
+to get the old Go-Back-N behaviour. Both ends should use the same mode.

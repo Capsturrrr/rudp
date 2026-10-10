@@ -35,11 +35,16 @@ $(BIN_DIR)/chat: $(SRC_DIR)/chat.c $(COMMON_SRC) | $(BIN_DIR)
 chat: $(BIN_DIR)/chat
 .PHONY: chat
 
-# Selective-ACK server (buffers out-of-order packets, reports them in a bitmap)
-$(BIN_DIR)/server_sack: $(SRC_DIR)/server.c $(COMMON_SRC) | $(BIN_DIR)
-	$(CC) $(CFLAGS) -DRUDP_SACK -o $@ $(SRC_DIR)/server.c $(COMMON_SRC)
+# Selective Repeat is now the default (server buffers out-of-order packets and reports them in an ACK bitmap).
+# The old Go-Back-N receiver is kept for comparison: make server_gbn  (pair it with: smart_client --gbn)
+$(BIN_DIR)/server_gbn: $(SRC_DIR)/server.c $(COMMON_SRC) | $(BIN_DIR)
+	$(CC) $(CFLAGS) -DRUDP_GBN -o $@ $(SRC_DIR)/server.c $(COMMON_SRC)
 
-sack: $(BIN_DIR)/server_sack $(BIN_DIR)/smart_client
+gbn: $(BIN_DIR)/server_gbn $(BIN_DIR)/smart_client
+.PHONY: gbn
+
+# backward-compatible alias from the time Selective ACK was opt-in
+sack: smart
 .PHONY: sack
 
 # Run the whole test suite (wire format, end to end, transport modes, simulator)

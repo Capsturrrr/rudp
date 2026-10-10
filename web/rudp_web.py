@@ -48,6 +48,8 @@ class Chat:
         s.sendq, s.sent_at = [], []
         s.base = s.next = s.expected = s.dups = 0
         s.adaptive_rto, s.rto, s.rs, s.rv = False, TIMEOUT_MS / 1000.0, None, 0.0   # RFC 6298 state (seconds)
+        s.gbn = False                        # True: original Go-Back-N behaviour (set with --gbn)
+        s.sacked, s.rbuf = set(), {}         # Selective Repeat: packets the peer reported / out-of-order packets we hold
         s.recover = -1                       # no new fast retransmit until this seq is acked (stops dup-ACK storms)
         s.msgs, s.log = [], []
         s.stats = dict(sent=0, dropped=0, retx=0)
@@ -103,6 +105,13 @@ class Chat:
             s.sent_at[q] = time.time()
             s.tx(DATA | ACK, q, s.expected, s.sendq[q], retx)
 
+    def resend_holes(s):
+        """Selective Repeat: resend only the unreported packets below the highest one the peer reported (or just the base)."""
+        hi = (max(s.sacked) if s.sacked else s.base) + 1
+        for q in range(s.base, min(hi, s.next)):
+            if q not in s.sacked:
+                s.retxed.add(q); s.sent_at[q] = time.time(); s.tx(DATA | ACK, q, s.expected, s.sendq[q], True)
+
     def send(s, text):
         with s.lock:
             s.pending.append(f"{s.name}: {text}"[:400].encode())
@@ -128,6 +137,7 @@ class Chat:
 
     def on_acked(s, old_base, new_base):
         now = time.time()
+        s.sacked = {q for q in s.sacked if q >= new_base}
         samples = []
         for q in range(old_base, new_base):
             t0 = s.first_sent.pop(q, None)
@@ -160,23 +170,37 @@ class Chat:
         if not s.heard:
             s.heard = True; s.note(f"connected to {src[0]}:{src[1]}", "ok")
         if flags & ACK:
+            if not s.gbn and not (flags & DATA) and len(p) == 8:       # bitmap: bit j set = peer holds packet ack+j
+                bits = int.from_bytes(p, "big")
+                for j in range(1, 64):
+                    if (bits >> j) & 1 and s.base <= ack + j < s.next: s.sacked.add(ack + j)
             if s.base < ack <= s.next:
                 s.on_acked(s.base, ack)
                 s.base, s.dups = ack, 0
             elif not (flags & DATA) and ack == s.base and s.base < s.next:
                 s.dups += 1
                 if s.dups >= DUP and s.base > s.recover:
-                    s.note(f"3 duplicate ACKs: fast retransmit from #{s.base}", "retx")
-                    s.loss_event("dup"); s.resend(s.base); s.recover = s.next - 1; s.dups = 0
+                    s.note(f"3 duplicate ACKs: fast retransmit of the missing packets from #{s.base}" if not s.gbn else f"3 duplicate ACKs: fast retransmit from #{s.base}", "retx")
+                    s.loss_event("dup"); (s.resend(s.base) if s.gbn else s.resend_holes()); s.recover = s.next - 1; s.dups = 0
         if flags & DATA:
             if seq == s.expected:
                 s.msgs.append(dict(seq=seq, mine=False, text=p.decode(errors="replace"), t=time.strftime("%H:%M")))
                 s.expected += 1
+                while s.expected in s.rbuf:                    # buffered packets that are now in order
+                    s.msgs.append(dict(seq=s.expected, mine=False, text=s.rbuf.pop(s.expected).decode(errors="replace"), t=time.strftime("%H:%M")))
+                    s.expected += 1
             elif seq < s.expected:
                 s.note(f"duplicate #{seq} discarded", "info")
+            elif not s.gbn and seq < s.expected + 64:
+                if seq not in s.rbuf: s.rbuf[seq] = p
+                s.note(f"out of order: buffered #{seq}, expected #{s.expected}", "info")
             else:
                 s.note(f"out of order: got #{seq}, expected #{s.expected}, discarded", "info")
-            s.tx(ACK, 0, s.expected)
+            if s.gbn: s.tx(ACK, 0, s.expected)
+            else:
+                bits = 0
+                for q in s.rbuf: bits |= 1 << (q - s.expected)
+                s.tx(ACK, 0, s.expected, bits.to_bytes(8, "big"))
 
     def loop(s):
         last_punch = 0
@@ -184,10 +208,20 @@ class Chat:
             with s.lock:
                 if not s.heard and time.time() - last_punch > 1:
                     last_punch = time.time(); s.tx(ACK, 0, s.expected)
-                if s.base < s.next and (time.time() - s.sent_at[s.base]) * 1000 > s.rto * 1000:
+                if s.gbn and s.base < s.next and (time.time() - s.sent_at[s.base]) * 1000 > s.rto * 1000:
                     s.note(f"timeout: resending #{s.base}..#{s.next - 1}", "retx")
                     s.loss_event("timeout"); s.resend(s.base); s.recover = s.next - 1
                     if s.adaptive_rto: s.rto = min(3.0, s.rto * 2)      # exponential backoff
+                if not s.gbn and s.base < s.next:                # Selective Repeat: every packet has its own timer
+                    now_ = time.time(); rto_ = s.rto
+                    exp = [q for q in range(s.base, s.next) if q not in s.sacked and now_ - s.sent_at[q] > rto_]
+                    if exp:
+                        if exp[0] > s.recover:                   # penalise once per loss event
+                            s.note(f"timeout: resending only the missing packets (#{exp[0]}...)", "retx")
+                            s.loss_event("timeout"); s.recover = s.next - 1
+                            if s.adaptive_rto: s.rto = min(3.0, s.rto * 2)
+                        for q in exp:
+                            s.retxed.add(q); s.sent_at[q] = now_; s.tx(DATA | ACK, q, s.expected, s.sendq[q], True)
                 s.rl_step(); s.pump(); s.sample()
             with s.lock:
                 while s.dq and s.dq[0][0] <= time.time():
@@ -251,13 +285,14 @@ if __name__ == "__main__":
     ap.add_argument("--loss", type=int, default=0); ap.add_argument("--delay", type=int, default=0, help="emulated one-way delay in ms")
     ap.add_argument("--rto", choices=["fixed", "adaptive"], default="fixed", help="retransmission timeout: fixed 300 ms (default) or RFC 6298 adaptive")
     ap.add_argument("--tcut", type=float, default=0.0, help="agent safety net: multiply the window by this on a retransmission timeout (0 = off, 0.25 recommended)")
+    ap.add_argument("--gbn", action="store_true", help="use the original Go-Back-N behaviour instead of Selective Repeat")
     ap.add_argument("--hybrid", type=float, default=0.0, help="neural agent hands control to AIMD while the loss fraction per interval is >= this (0 = off, 0.10 recommended)")
     a = ap.parse_args()
     import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid
     import os
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
     chat = Chat(a.udp, a.peer, a.name, a.loss, a.delay)
-    chat.adaptive_rto = a.rto == "adaptive"
+    chat.adaptive_rto = a.rto == "adaptive"; chat.gbn = a.gbn
     threading.Thread(target=chat.loop, daemon=True).start()
     print(f"RUDP Web Chat: open http://localhost:{a.http}   (UDP {a.udp} -> {a.peer})")
     ThreadingHTTPServer(("0.0.0.0", a.http), make_handler(chat, html)).serve_forever()
