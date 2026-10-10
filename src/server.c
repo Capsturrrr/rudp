@@ -116,6 +116,12 @@ int main(void) {
             continue;
         }
 
+        /* If the client's final handshake ACK was lost, its first DATA packet proves the connection is up (as in TCP). */
+        if (state == STATE_SYN_RECEIVED && (pkt.flags & FLAG_DATA) && !(pkt.flags & FLAG_SYN)) {
+            state = STATE_ESTABLISHED;
+            if (!getenv("RUDP_QUIET")) printf("Handshake ACK was lost; DATA arrived, treating the connection as established\n");
+        }
+
         if (pkt.flags & FLAG_SYN) {
             /* Accept a fresh SYN in ANY state, not just LISTEN.
              * This makes the server resilient to a prior connection being

@@ -10,7 +10,7 @@ P[fast]="--delay 60 --jitter 5 --loss 0.1 --rate 3000 --queue 300"
 P[bad]="--delay 40 --jitter 5 --loss 10 --rate 600 --queue 40"
 declare -A NP=( [5g]=1200 [lossy]=1200 [sat]=1200 [fast]=3000 [bad]=300 )
 port=9700
-for sc in 5g lossy sat fast bad; do
+for sc in ${SCEN:-5g lossy sat fast bad}; do
   port=$((port+10)); sp=$port; px=$((port+1)); gcc -DSERVER_PORT=$sp -o bin/server_$sp src/server.c src/common.c
   N=$RUNS; [ $sc = bad ] && N=$BADRUNS
   ( ./bin/server_$sp >/dev/null 2>&1 & SP=$!
@@ -22,7 +22,7 @@ for sc in 5g lossy sat fast bad; do
           aimd_128) A="--mode aimd --init 10 --maxcwnd 128 --ssthresh 128";;
           deep) A="--mode deep --init 10 --dfile results/dqn_chat.txt";;
         esac
-        ./bin/impair $px $sp ${P[$sc]} --seed $((i+arm_n)) 2>/dev/null & PX=$!; sleep 0.2
+        ./bin/impair $px $sp ${P[$sc]} --seed $i 2>/dev/null & PX=$!; sleep 0.2
         timeout 250 ./bin/smart_client $A --emu 0 --port $px --packets ${NP[$sc]} --scenario $sc --seed $((9500+i)) | grep RESULT | sed "s/RESULT,\([^,]*\),[^,]*,/RESULT,\1,$arm,/" >> results/eval_proxy_$sc.csv
         kill $PX 2>/dev/null; wait $PX 2>/dev/null
       done

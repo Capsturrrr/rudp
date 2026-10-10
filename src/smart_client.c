@@ -32,7 +32,11 @@
 typedef struct { double t; int len; uint8_t buf[RUDP_HEADER_SIZE + MAX_PAYLOAD]; } pend_t;
 typedef struct { pend_t *a; int head, tail; } ring_t;
 
+/* --vt 1: virtual time. The server is simulated in-process and the clock advances by a fixed step per loop
+   iteration (the real loop sleeps ~0.3 ms), so a 20 s transfer takes milliseconds and results are reproducible. */
+static int vt = 0; static double vclock = 0;
 static double now_ms(void) {
+    if (vt) return vclock;
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
 }
@@ -100,9 +104,23 @@ static double rev_path(double now) {
     last_arrive_r = arr; return arr;
 }
 
+/* ---- in-process receiver for --vt 1: same behaviour as server.c (256-packet Selective Repeat window + 32-byte bitmap,
+   or Go-Back-N when use_sack is off) ---- */
+static uint32_t v_exp = 0; static uint8_t v_have[256]; static int v_sr = 1;
+static void vsrv_rx(ring_t *rev, double now, const uint8_t *b, int n) {
+    rudp_packet_t p; if (rudp_unpack(b, (size_t)n, &p) != 0 || !(p.flags & FLAG_DATA)) return;
+    if (p.seq_num == v_exp) { v_exp++; if (v_sr) while (v_have[v_exp % 256]) { v_have[v_exp % 256] = 0; v_exp++; } }
+    else if (v_sr && p.seq_num > v_exp && p.seq_num - v_exp < 256) v_have[p.seq_num % 256] = 1;
+    rudp_packet_t a; memset(&a, 0, sizeof a); a.ack_num = v_exp; a.flags = FLAG_ACK;
+    if (v_sr) { a.payload_len = 32; for (int j = 1; j < 256; j++) if (v_have[(v_exp + (uint32_t)j) % 256]) a.payload[j / 8] |= (uint8_t)(1u << (j % 8)); }
+    uint8_t ob[BUFFER_SIZE]; int l = rudp_pack(&a, ob, sizeof ob);
+    double arr = rev_path(now); rpush(rev, arr, ob, l);
+}
+
+
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
-    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
+    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; double vstep = 0.35; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
     int use_sack = 1; double hyb = -1.0, ss0 = 16.0; int guard = 0, cap_set = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
@@ -115,6 +133,8 @@ int main(int argc, char **argv) {
         else if (ARG("--queue")) queue_cap = atoi(argv[++i]);
         else if (ARG("--packets")) npk = atoi(argv[++i]);
         else if (ARG("--file")) fpath = argv[++i];
+        else if (ARG("--vt")) vt = atoi(argv[++i]);
+        else if (ARG("--vstep")) vstep = atof(argv[++i]);
         else if (ARG("--seed")) seed = (unsigned)atoi(argv[++i]);
         else if (ARG("--qfile")) qfile = argv[++i];
         else if (ARG("--train")) train = atoi(argv[++i]);
@@ -148,7 +168,7 @@ int main(int argc, char **argv) {
     if (npk > MAXN) npk = MAXN;
     if (queue_cap > QCAP / 2) queue_cap = QCAP / 2;
     if (ref <= 0) ref = rate_pps > 0 ? rate_pps : 1000;
-    srand(seed);
+    srand(seed); v_sr = use_sack;
     if (pcapp) pcap_open(pcapp);
 
     rl_agent_t ag; int have_q = 0;
@@ -157,15 +177,16 @@ int main(int argc, char **argv) {
     (void)have_q;
     ag.eps = train ? eps : 0.0;
 
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) { perror("socket"); return 1; }
+    int sockfd = vt ? -1 : socket(AF_INET, SOCK_DGRAM, 0);
+    if (!vt && sockfd < 0) { perror("socket"); return 1; }
     struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)port);
     inet_pton(AF_INET, SERVER_IP, &sa.sin_addr);
-    struct timeval tv = {1, 0}; setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct timeval tv = {1, 0}; if (!vt) setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
     /* ---- handshake (direct, not emulated) ---- */
     uint32_t cseq = (uint32_t)rand(), sseq = 0; uint8_t buf[BUFFER_SIZE]; int ok = 0;
+    if (vt) { cseq = 1000; ok = 1; }
     for (int at = 0; at < 8 && !ok; at++) {
         rudp_packet_t syn; memset(&syn, 0, sizeof syn); syn.seq_num = cseq; syn.flags = FLAG_SYN;
         int l = rudp_pack(&syn, buf, sizeof buf);
@@ -187,7 +208,7 @@ int main(int argc, char **argv) {
     /* ---- packets ---- */
     static rudp_packet_t pk[MAXN];
     static double sent_at[MAXN]; static uint8_t retx_flag[MAXN], sacked[MAXN];
-    uint32_t base_seq = cseq + 1;
+    uint32_t base_seq = cseq + 1; v_exp = base_seq;
     FILE *ff = NULL;
     if (fpath) {                                   /* file mode: send a real file in 512-byte chunks */
         ff = fopen(fpath, "rb"); if (!ff) { perror(fpath); return 1; }
@@ -240,10 +261,11 @@ int main(int argc, char **argv) {
         pend_t *p;
         while ((p = rfront(&fwd)) && p->t <= now) {
             pcap_write(now, 1, port, p->buf, p->len);
-            sendto(sockfd, p->buf, (size_t)p->len, 0, (struct sockaddr *)&sa, sizeof sa); fwd.head++;
+            if (vt) vsrv_rx(&rev, now, p->buf, p->len); else sendto(sockfd, p->buf, (size_t)p->len, 0, (struct sockaddr *)&sa, sizeof sa);
+            fwd.head++;
         }
         /* 2. drain real socket (server replies) into the delayed return path */
-        for (;;) {
+        for (; !vt;) {
             struct pollfd pf = { sockfd, POLLIN, 0 };
             if (poll(&pf, 1, 0) <= 0) break;
             ssize_t n = recvfrom(sockfd, buf, sizeof buf, 0, NULL, NULL);
@@ -342,7 +364,7 @@ int main(int argc, char **argv) {
                     double thr = ac / peak; if (thr > 1) thr = 1;
                     if (hyb > 0 && use_deep) { if (lossf >= hyb) guard = 3; else if (guard > 0) guard--; }
                     int lo = (lossf == 0 && ratio < 1.5) ? 2 : 0;           /* no congestion signal: never shrink */
-                    int act;
+                    int act = 2;
                     if (guard > 0) { if (tr) fprintf(tr, "%.1f,GUARD,%.2f,%.1f\n", now - t0, cwnd, srtt); }
                     else if (use_deep) {
                         double x[DN_IN] = { (ratio - 1.0 > 3.0 ? 3.0 : ratio - 1.0) / 3.0, (lossf > 0.3 ? 0.3 : lossf) / 0.3, cwnd / 32.0, thr, RL_MULT[last_act] - 1.0 }, q[DN_OUT];
@@ -389,9 +411,9 @@ int main(int argc, char **argv) {
             TX(next, 0); if (!timer_on) { timer_on = 1; timer_start = now_ms(); } next++;
         }
         /* 7. wait a little for the next event */
-        struct pollfd pf = { sockfd, POLLIN, 0 };
-        poll(&pf, 1, 0);
-        struct timespec ts = { 0, 300000 }; nanosleep(&ts, NULL);
+        if (vt) vclock += vstep;
+        else { struct pollfd pf = { sockfd, POLLIN, 0 }; poll(&pf, 1, 0);
+        struct timespec ts = { 0, 300000 }; nanosleep(&ts, NULL); }
         if (now_ms() - t0 > 600000) { fprintf(stderr, "abort: stuck\n"); return 3; }
     }
     double done = now_ms() - t0;
@@ -401,9 +423,10 @@ int main(int argc, char **argv) {
     rudp_packet_t fin; memset(&fin, 0, sizeof fin);
     fin.seq_num = base_seq + (uint32_t)npk; fin.flags = FLAG_FIN;
     int l = rudp_pack(&fin, buf, sizeof buf);
+    if (!vt) {
     sendto(sockfd, buf, (size_t)l, 0, (struct sockaddr *)&sa, sizeof sa);
     tv.tv_sec = 0; tv.tv_usec = 200000; setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    recvfrom(sockfd, buf, sizeof buf, 0, NULL, NULL);
+    recvfrom(sockfd, buf, sizeof buf, 0, NULL, NULL); }
 
     if (use_rl && train && qfile) rl_save(&ag, qfile);
     printf("RESULT,%s,%s,%.1f,%d,%ld,%ld,%ld,%ld,%.2f,%.2f,%.1f,%.2f,%.4f\n",
@@ -412,6 +435,6 @@ int main(int argc, char **argv) {
            npk / (done / 1000.0), cwnd, rew_n ? rew_sum / rew_n : 0.0);
     if (tr) fclose(tr);
     if (pcapf) fclose(pcapf);
-    close(sockfd);
+    if (!vt) close(sockfd);
     return 0;
 }

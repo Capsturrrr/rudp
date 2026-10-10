@@ -1,11 +1,15 @@
 /* impair: a small user-space network impairment proxy for UDP (a stand-in for tc/netem when no root or kernel module is
- * available). Sits between a client and a server on real sockets:
+ * available). It sits between clients and servers on real sockets and models ONE shared bottleneck:
  *
- *     client --UDP--> impair :LISTEN --UDP--> server :TARGET        (and back)
+ *     client A --UDP--> impair :LISTEN_A --UDP--> server A :TARGET_A     (flows share the forward bottleneck)
+ *     client B --UDP--> impair :LISTEN_B --UDP--> server B :TARGET_B
  *
- * Forward direction (client->server): random loss, one-way delay + jitter (kept in order), a bottleneck of RATE packets/s
- * with a drop-tail queue of QUEUE packets. Reverse direction: delay + jitter only.
- *   usage: impair LISTEN TARGET [--delay ms] [--jitter ms] [--loss pct] [--rate pps] [--queue n] [--seed n]
+ * Forward direction: random loss, one-way delay + jitter (kept in order per flow), a bottleneck of RATE packets/s shared
+ * by all flows with a drop-tail queue of QUEUE packets. Reverse direction: delay + jitter only.
+ *   usage: impair LISTEN:TARGET [LISTEN:TARGET ...] [--delay ms] [--jitter ms] [--loss pct] [--rate pps] [--queue n] [--seed n]
+ *   (for compatibility "LISTEN TARGET" as two separate numbers also works for a single flow)
+ * When the first flow sends its FIN, the number of packets each flow got through the bottleneck so far is printed
+ * ("SHARE ..."), which is what the fairness test reads. Stop with SIGTERM: totals go to stderr.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -19,8 +23,10 @@
 #include <sys/socket.h>
 
 #define RING 8192
-typedef struct { double due; int len; uint8_t d[1500]; } item_t;
-typedef struct { item_t *q; int h, t; double last_due, last_dep; } lane_t;
+#define MAXF 8
+typedef struct { double due; int len; int flow; uint8_t d[1500]; } item_t;
+typedef struct { item_t *q; int h, t; double last_due; } lane_t;
+typedef struct { int in, out; struct sockaddr_in srv, cli; int have_cli; long fwd; lane_t rv; double last_due_f; } flow_t;
 
 static volatile sig_atomic_t stop;
 static void on_term(int sig) { (void)sig; stop = 1; }
@@ -28,47 +34,75 @@ static double now_ms(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, 
 static double urand(void) { return rand() / (RAND_MAX + 1.0); }
 
 int main(int argc, char **argv) {
-    if (argc < 3) { fprintf(stderr, "usage: %s LISTEN TARGET [--delay ms] [--jitter ms] [--loss pct] [--rate pps] [--queue n] [--seed n]\n", argv[0]); return 1; }
-    int lp = atoi(argv[1]), tp = atoi(argv[2]), queue = 50; double delay = 10, jitter = 0, loss = 0, rate = 0; unsigned seed = 1;
-    for (int i = 3; i + 1 < argc; i += 2) {
-        if (!strcmp(argv[i], "--delay")) delay = atof(argv[i + 1]); else if (!strcmp(argv[i], "--jitter")) jitter = atof(argv[i + 1]);
-        else if (!strcmp(argv[i], "--loss")) loss = atof(argv[i + 1]); else if (!strcmp(argv[i], "--rate")) rate = atof(argv[i + 1]);
-        else if (!strcmp(argv[i], "--queue")) queue = atoi(argv[i + 1]); else if (!strcmp(argv[i], "--seed")) seed = (unsigned)atoi(argv[i + 1]);
+    flow_t fl[MAXF]; int nf = 0, queue = 50; double delay = 10, jitter = 0, loss = 0, rate = 0; unsigned seed = 1;
+    int pend_num = -1;
+    for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--", 2) && i + 1 < argc) {
+            double v = atof(argv[++i]);
+            if (!strcmp(argv[i - 1], "--delay")) delay = v; else if (!strcmp(argv[i - 1], "--jitter")) jitter = v;
+            else if (!strcmp(argv[i - 1], "--loss")) loss = v; else if (!strcmp(argv[i - 1], "--rate")) rate = v;
+            else if (!strcmp(argv[i - 1], "--queue")) queue = (int)v; else if (!strcmp(argv[i - 1], "--seed")) seed = (unsigned)v;
+        } else if (nf < MAXF) {
+            int l, t;
+            if (sscanf(argv[i], "%d:%d", &l, &t) == 2) { memset(&fl[nf], 0, sizeof fl[nf]); fl[nf].in = l; fl[nf].out = t; nf++; }
+            else if (pend_num < 0) pend_num = atoi(argv[i]);
+            else { memset(&fl[nf], 0, sizeof fl[nf]); fl[nf].in = pend_num; fl[nf].out = atoi(argv[i]); nf++; pend_num = -1; }
+        }
     }
+    if (nf == 0) { fprintf(stderr, "usage: %s LISTEN:TARGET [LISTEN:TARGET ...] [--delay ms] [--jitter ms] [--loss pct] [--rate pps] [--queue n] [--seed n]\n", argv[0]); return 1; }
     srand(seed); signal(SIGTERM, on_term); signal(SIGINT, on_term);
-    int in = socket(AF_INET, SOCK_DGRAM, 0), out = socket(AF_INET, SOCK_DGRAM, 0);
-    struct sockaddr_in a = {0}, srv = {0}, cli = {0}; int have_cli = 0;
-    a.sin_family = AF_INET; a.sin_addr.s_addr = inet_addr("127.0.0.1"); a.sin_port = htons((uint16_t)lp);
-    if (bind(in, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
-    srv = a; srv.sin_port = htons((uint16_t)tp);
-    lane_t fw = { calloc(RING, sizeof(item_t)), 0, 0, 0, 0 }, rv = { calloc(RING, sizeof(item_t)), 0, 0, 0, 0 };
-    long drops_rand = 0, drops_queue = 0, fwd = 0;
-    for (;;) {
+    struct pollfd p[2 * MAXF];
+    for (int f = 0; f < nf; f++) {
+        int lp = fl[f].in, tp = fl[f].out;
+        fl[f].in = socket(AF_INET, SOCK_DGRAM, 0); fl[f].out = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in a = {0}; a.sin_family = AF_INET; a.sin_addr.s_addr = inet_addr("127.0.0.1"); a.sin_port = htons((uint16_t)lp);
+        if (bind(fl[f].in, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind"); return 1; }
+        fl[f].srv = a; fl[f].srv.sin_port = htons((uint16_t)tp);
+        fl[f].rv.q = calloc(RING, sizeof(item_t));
+        p[2 * f] = (struct pollfd){ fl[f].in, POLLIN, 0 }; p[2 * f + 1] = (struct pollfd){ fl[f].out, POLLIN, 0 };
+    }
+    lane_t fw = { calloc(RING, sizeof(item_t)), 0, 0, 0 }; double last_dep = 0, last_due_f = 0;
+    long drops_rand = 0, drops_queue = 0; int shown = 0;
+    while (!stop) {
         double now = now_ms(), next = now + 50;
-        lane_t *L[2] = { &fw, &rv };
-        for (int k = 0; k < 2; k++) if (L[k]->h < L[k]->t) { double d = L[k]->q[L[k]->h % RING].due; if (d < next) next = d; }
-        struct pollfd p[2] = { { in, POLLIN, 0 }, { out, POLLIN, 0 } };
+        if (fw.h < fw.t && fw.q[fw.h % RING].due < next) next = fw.q[fw.h % RING].due;
+        for (int f = 0; f < nf; f++) if (fl[f].rv.h < fl[f].rv.t && fl[f].rv.q[fl[f].rv.h % RING].due < next) next = fl[f].rv.q[fl[f].rv.h % RING].due;
         int to = (int)(next - now); if (to < 0) to = 0;
-        if (poll(p, 2, to) > 0) {
-            for (int k = 0; k < 2; k++) if (p[k].revents & POLLIN) {
-                uint8_t buf[1500]; struct sockaddr_in from; socklen_t fl = sizeof from;
-                int n = (int)recvfrom(k == 0 ? in : out, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl); if (n <= 0) continue;
-                double t = now_ms(); lane_t *ln = k == 0 ? &fw : &rv;
-                if (k == 0) { cli = from; have_cli = 1; if (loss > 0 && urand() * 100.0 < loss) { drops_rand++; continue; } }
-                double dep = t;
-                if (k == 0 && rate > 0) {
-                    if (ln->last_dep - t > queue * 1000.0 / rate) { drops_queue++; continue; }   /* backlog (in time) exceeds the queue */
-                    dep = (ln->last_dep > t ? ln->last_dep : t) + 1000.0 / rate; ln->last_dep = dep;
+        if (poll(p, (nfds_t)(2 * nf), to) > 0) {
+            for (int k = 0; k < 2 * nf; k++) if (p[k].revents & POLLIN) {
+                int f = k / 2, fwd_dir = (k % 2 == 0);
+                uint8_t buf[1500]; struct sockaddr_in from; socklen_t fln = sizeof from;
+                int n = (int)recvfrom(p[k].fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fln); if (n <= 0) continue;
+                double t = now_ms();
+                if (fwd_dir) {
+                    fl[f].cli = from; fl[f].have_cli = 1;
+                    if (n >= 13 && (buf[8] & 0x04) && !shown) { shown = 1; printf("SHARE"); for (int g = 0; g < nf; g++) printf(" %ld", fl[g].fwd); printf("\n"); fflush(stdout); }
+                    if (loss > 0 && urand() * 100.0 < loss) { drops_rand++; continue; }
+                    double dep = t;
+                    if (rate > 0) {
+                        if (last_dep - t > queue * 1000.0 / rate) { drops_queue++; continue; }
+                        dep = (last_dep > t ? last_dep : t) + 1000.0 / rate; last_dep = dep;
+                    }
+                    double due = dep + delay + (jitter > 0 ? (urand() * 2 - 1) * jitter : 0);
+                    if (due < last_due_f) due = last_due_f;
+                    last_due_f = due;
+                    if (fw.t - fw.h >= RING) continue;
+                    item_t *it = &fw.q[fw.t % RING]; it->due = due; it->len = n; it->flow = f; memcpy(it->d, buf, (size_t)n); fw.t++;
+                    fl[f].fwd++;
+                } else {
+                    lane_t *ln = &fl[f].rv;
+                    double due = t + delay + (jitter > 0 ? (urand() * 2 - 1) * jitter : 0); if (due < ln->last_due) due = ln->last_due; ln->last_due = due;
+                    if (ln->t - ln->h >= RING) continue;
+                    item_t *it = &ln->q[ln->t % RING]; it->due = due; it->len = n; it->flow = f; memcpy(it->d, buf, (size_t)n); ln->t++;
                 }
-                double due = dep + delay + (jitter > 0 ? (urand() * 2 - 1) * jitter : 0); if (due < ln->last_due) due = ln->last_due; ln->last_due = due;
-                if (ln->t - ln->h >= RING) continue;
-                item_t *it = &ln->q[ln->t % RING]; it->due = due; it->len = n; memcpy(it->d, buf, (size_t)n); ln->t++;
-                if (k == 0) fwd++;
             }
         }
         double t = now_ms();
-        while (fw.h < fw.t && fw.q[fw.h % RING].due <= t) { item_t *it = &fw.q[fw.h++ % RING]; sendto(out, it->d, (size_t)it->len, 0, (struct sockaddr *)&srv, sizeof srv); }
-        while (rv.h < rv.t && rv.q[rv.h % RING].due <= t && have_cli) { item_t *it = &rv.q[rv.h++ % RING]; sendto(in, it->d, (size_t)it->len, 0, (struct sockaddr *)&cli, sizeof cli); }
-        if (stop) { fprintf(stderr, "impair: forwarded %ld, random drops %ld, queue drops %ld\n", fwd, drops_rand, drops_queue); return 0; }
+        /* the shared queue is FIFO in departure order, but each item has its own due time; release the head while due */
+        while (fw.h < fw.t && fw.q[fw.h % RING].due <= t) { item_t *it = &fw.q[fw.h++ % RING]; sendto(fl[it->flow].out, it->d, (size_t)it->len, 0, (struct sockaddr *)&fl[it->flow].srv, sizeof fl[it->flow].srv); }
+        for (int f = 0; f < nf; f++) { lane_t *ln = &fl[f].rv; while (ln->h < ln->t && ln->q[ln->h % RING].due <= t && fl[f].have_cli) { item_t *it = &ln->q[ln->h++ % RING]; sendto(fl[f].in, it->d, (size_t)it->len, 0, (struct sockaddr *)&fl[f].cli, sizeof fl[f].cli); } }
     }
+    fprintf(stderr, "impair: random drops %ld, queue drops %ld; per-flow forwarded", drops_rand, drops_queue);
+    for (int f = 0; f < nf; f++) fprintf(stderr, " %ld", fl[f].fwd);
+    fprintf(stderr, "\n"); return 0;
 }

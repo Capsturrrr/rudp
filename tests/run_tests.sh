@@ -26,6 +26,7 @@ for variant in "sr:./bin/server" "gbn:./bin/server_gbn"; do
   done
   kill $SP 2>/dev/null; wait $SP 2>/dev/null
 done
+step "handshake with a lost final ACK"; python3 tests/test_handshake.py || fail=1
 step "file transfer through the impairment proxy (real sockets, 5% loss, 25 ms delay): received file is byte-identical"
 gcc -DSERVER_PORT=9931 -o bin/server_t2 src/server.c src/common.c; make impair >/dev/null 2>&1
 head -c 400000 /dev/urandom > /tmp/t_in.bin
