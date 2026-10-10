@@ -1,0 +1,6 @@
+variant               best-of-seeds (by validation)   all seeds' stress means
+full                  stress   3.59 s (seed 12, val 2.97)   5.21 7.10 3.59 7.31
+no_mask               stress   6.54 s (seed 13, val 5.07)   6.60 7.44 7.24 6.54
+no_delay_penalty      stress   3.35 s (seed 13, val 2.76)   3.33 3.24 7.33 3.35
+no_last_action        stress   3.23 s (seed 13, val 2.95)   6.68 7.45 7.15 3.23
+no_throughput_feat    stress   3.41 s (seed 11, val 2.82)   3.31 3.41 3.36 3.24

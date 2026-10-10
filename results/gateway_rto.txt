@@ -1,0 +1,3 @@
+Web gateway, RTT 600 ms (300 ms one way), 5% loss per side, AIMD, 100 test messages, one run each (illustration, not a CI)
+fixed RTO 300 ms   : 29.0 s, 302 packets sent, 201 retransmissions (RTO < RTT, so spurious timeouts)
+adaptive RTO (RFC 6298): 17.8 s, 155 packets sent, 54 retransmissions

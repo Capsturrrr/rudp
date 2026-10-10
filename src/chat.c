@@ -48,6 +48,7 @@ static uint32_t base = 0;      /* oldest unacked message */
 static uint32_t next_seq = 0;  /* next message number to send */
 static long long sent_at[MAX_MSGS];
 static int dup_acks = 0;
+static long recover = -1;   /* highest seq outstanding at the last retransmit; no new fast retransmit until it is acked */
 
 /* receiver state */
 static uint32_t expected = 0;
@@ -102,10 +103,10 @@ static void handle_packet(const uint8_t *buf, ssize_t n) {
             base = p.ack_num;
             dup_acks = 0;
         } else if (!(p.flags & FLAG_DATA) && p.ack_num == base && base < next_seq) {
-            if (++dup_acks == DUP_ACK_THRESHOLD) {
+            if (++dup_acks >= DUP_ACK_THRESHOLD && (long)base > recover) {
                 printf("      [3 duplicate ACKs: fast retransmit from #%u]\n", base);
                 send_window_from(base, 1);
-                dup_acks = 0;
+                recover = (long)next_seq - 1; dup_acks = 0;
             }
         }
     }
@@ -209,6 +210,7 @@ int main(int argc, char **argv) {
         if (base < next_seq && now_ms() - sent_at[base % MAX_MSGS] > CHAT_TIMEOUT_MS) {
             printf("      [timeout: resending #%u..#%u]\n", base, next_seq - 1);
             send_window_from(base, 1);
+            recover = (long)next_seq - 1;
         }
         if (!stdin_open && base >= next_seq) break;
     }

@@ -38,10 +38,14 @@ def save_q(q, path):
 
 LAG = 1
 MASK = True
+DELAY_W = 0.5          # weight of the RTT-inflation penalty in the reward
+FEAT_ZERO = ()         # feature indices blanked out (ablation studies only)
 
 def deep_feat(ratio, loss, cwnd, thr, last_a):
     """Continuous state for the neural agent (the table agent buckets the first three)."""
-    return [min(ratio - 1.0, 3.0) / 3.0, min(loss, 0.3) / 0.3, cwnd / CWND_MAX, thr, RL_MULT[last_a] - 1.0]
+    f = [min(ratio - 1.0, 3.0) / 3.0, min(loss, 0.3) / 0.3, cwnd / CWND_MAX, thr, RL_MULT[last_a] - 1.0]
+    for i in FEAT_ZERO: f[i] = 0.0
+    return f
 
 class Controller:
     def __init__(self, mode="fixed", q=None, alpha=0.15, gamma=0.9, eps=0.0, rng=None, net=None):
@@ -114,7 +118,7 @@ class Controller:
         allowed = range(5)
         if MASK and loss == 0 and ratio < 1.5:
             allowed = (2, 3, 4)          # no congestion signal: never shrink the window
-        r = thr - 0.5 * max(0.0, ratio - 1.0) - 4.0 * loss
+        r = thr - DELAY_W * max(0.0, ratio - 1.0) - 4.0 * loss
         if deep:
             f = deep_feat(ratio, loss, self.cwnd, thr, self.prev_a)
             if self.learn and self.net_learn and self.prev is not None:

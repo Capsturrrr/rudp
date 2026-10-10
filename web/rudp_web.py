@@ -47,6 +47,8 @@ class Chat:
         s.peer = (ip, int(port)); s.heard = False
         s.sendq, s.sent_at = [], []
         s.base = s.next = s.expected = s.dups = 0
+        s.adaptive_rto, s.rto, s.rs, s.rv = False, TIMEOUT_MS / 1000.0, None, 0.0   # RFC 6298 state (seconds)
+        s.recover = -1                       # no new fast retransmit until this seq is acked (stops dup-ACK storms)
         s.msgs, s.log = [], []
         s.stats = dict(sent=0, dropped=0, retx=0)
         s.import_random = __import__("random")
@@ -63,6 +65,8 @@ class Chat:
         s.first_sent, s.retxed = {}, set()
         s.pending = collections.deque()
         s.bulk = None                        # dict(total, start, done_at, mode)
+        s.hist, s.last_samp, s.t0 = collections.deque(maxlen=300), 0.0, time.time()
+        s.last_drop, s.last_sent = 0, 0
 
     def note(s, text, kind="info"):
         s.log.append(dict(t=time.strftime("%H:%M:%S"), kind=kind, text=text))
@@ -131,6 +135,10 @@ class Chat:
                 samples.append(now - t0)
             s.retxed.discard(q)
         s.cc.on_ack(new_base - old_base, samples)
+        for r in samples:                                   # RFC 6298 RTO estimator (used only with --rto adaptive)
+            if s.rs is None: s.rs, s.rv = r, r / 2
+            else: s.rv = 0.75 * s.rv + 0.25 * abs(s.rs - r); s.rs = 0.875 * s.rs + 0.125 * r
+            if s.adaptive_rto: s.rto = min(3.0, max(0.2, s.rs + 4 * s.rv))
         if s.bulk and s.bulk["done_at"] is None and new_base >= s.bulk["first"] + s.bulk["total"]:
             s.bulk["done_at"] = time.time()
             s.note(f"stress test done: {s.bulk['total']} messages in {s.bulk['done_at'] - s.bulk['start']:.1f} s ({s.bulk['mode']})", "ok")
@@ -157,9 +165,9 @@ class Chat:
                 s.base, s.dups = ack, 0
             elif not (flags & DATA) and ack == s.base and s.base < s.next:
                 s.dups += 1
-                if s.dups == DUP:
+                if s.dups >= DUP and s.base > s.recover:
                     s.note(f"3 duplicate ACKs: fast retransmit from #{s.base}", "retx")
-                    s.loss_event("dup"); s.resend(s.base); s.dups = 0
+                    s.loss_event("dup"); s.resend(s.base); s.recover = s.next - 1; s.dups = 0
         if flags & DATA:
             if seq == s.expected:
                 s.msgs.append(dict(seq=seq, mine=False, text=p.decode(errors="replace"), t=time.strftime("%H:%M")))
@@ -176,10 +184,11 @@ class Chat:
             with s.lock:
                 if not s.heard and time.time() - last_punch > 1:
                     last_punch = time.time(); s.tx(ACK, 0, s.expected)
-                if s.base < s.next and (time.time() - s.sent_at[s.base]) * 1000 > TIMEOUT_MS:
+                if s.base < s.next and (time.time() - s.sent_at[s.base]) * 1000 > s.rto * 1000:
                     s.note(f"timeout: resending #{s.base}..#{s.next - 1}", "retx")
-                    s.loss_event("timeout"); s.resend(s.base)
-                s.rl_step(); s.pump()
+                    s.loss_event("timeout"); s.resend(s.base); s.recover = s.next - 1
+                    if s.adaptive_rto: s.rto = min(3.0, s.rto * 2)      # exponential backoff
+                s.rl_step(); s.pump(); s.sample()
             with s.lock:
                 while s.dq and s.dq[0][0] <= time.time():
                     _, _, raw_, dst_ = heapq.heappop(s.dq)
@@ -189,12 +198,23 @@ class Chat:
                 raw, src = s.sock.recvfrom(2048)
                 with s.lock: s.handle(raw, src)
 
+    def sample(s):
+        """Record one point of the live dashboard (about 5 per second, last 60 s kept)."""
+        now = time.time()
+        if now - s.last_samp < 0.2: return
+        s.last_samp = now
+        d, sn = s.stats["dropped"] - s.last_drop, s.stats["sent"] - s.last_sent
+        s.last_drop, s.last_sent = s.stats["dropped"], s.stats["sent"]
+        s.hist.append(dict(t=round(now - s.t0, 1), cwnd=round(s.cc.cwnd, 1), win=s.window(), fl=s.next - s.base,
+                           rtt=round((s.cc.srtt or 0) * 1000), base=round((s.cc.min_rtt or 0) * 1000),
+                           loss=round(100.0 * d / sn, 1) if sn else 0.0, mode=s.cc.mode, act=s.cc.last_action))
+
     def snapshot(s):
         with s.lock:
             ms = [dict(m, delivered=(m["mine"] and m["seq"] < s.base)) for m in s.msgs]
             return dict(name=s.name, peer=f"{s.peer[0]}:{s.peer[1]}", connected=s.heard, loss=s.loss,
                         base=s.base, next=s.next, expected=s.expected, window=s.window(), mode=s.cc.mode, cwnd=round(s.cc.cwnd, 1), queued=len(s.pending), agent_ok=s.agent_ok, deep_ok=s.deep_ok, last_action=s.cc.last_action, bulk=(dict(s.bulk, elapsed=round((s.bulk['done_at'] or time.time()) - s.bulk['start'], 1), done=s.bulk['done_at'] is not None) if s.bulk else None),
-                        stats=dict(s.stats), msgs=ms, log=s.log[-60:])
+                        stats=dict(s.stats), hist=list(s.hist), rto=round(s.rto * 1000), rto_mode="adaptive" if s.adaptive_rto else "fixed", srtt=round((s.cc.srtt or 0) * 1000), msgs=ms, log=s.log[-60:])
 
 
 def make_handler(chat, html):
@@ -229,10 +249,12 @@ if __name__ == "__main__":
     ap.add_argument("--udp", type=int, default=9001); ap.add_argument("--peer", required=True)
     ap.add_argument("--name", default="me"); ap.add_argument("--http", type=int, default=8080)
     ap.add_argument("--loss", type=int, default=0); ap.add_argument("--delay", type=int, default=0, help="emulated one-way delay in ms")
+    ap.add_argument("--rto", choices=["fixed", "adaptive"], default="fixed", help="retransmission timeout: fixed 300 ms (default) or RFC 6298 adaptive")
     a = ap.parse_args()
     import os
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
     chat = Chat(a.udp, a.peer, a.name, a.loss, a.delay)
+    chat.adaptive_rto = a.rto == "adaptive"
     threading.Thread(target=chat.loop, daemon=True).start()
     print(f"RUDP Web Chat: open http://localhost:{a.http}   (UDP {a.udp} -> {a.peer})")
     ThreadingHTTPServer(("0.0.0.0", a.http), make_handler(chat, html)).serve_forever()

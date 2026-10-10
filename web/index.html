@@ -33,6 +33,7 @@ input[type=range]{width:100%}h2{font:600 12px ui-monospace,monospace;color:var(-
 <select id="mode" style="width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--ln);padding:6px;border-radius:6px"><option value="fixed">Fixed window (8)</option><option value="aimd">AIMD (rule-based)</option><option value="smart">Smart-RUDP (Q-table)</option><option value="deep">Smart-RUDP (deep, neural net)</option></select>
 <div id="win" style="font-family:ui-monospace,monospace;margin-top:8px;font-size:13px"></div>
 <button type="button" id="bulk" style="margin-top:8px;padding:8px 12px;width:100%">Send 60 test messages</button><div id="bres" style="font-family:ui-monospace,monospace;font-size:13px;margin-top:6px;color:var(--am)"></div></div>
+<div class="box"><h2>Live dashboard (last 60 s)</h2><canvas id="cv" width="340" height="150" style="width:100%;height:150px"></canvas><div style="font:11px ui-monospace,monospace;color:var(--mu);display:flex;gap:10px;flex-wrap:wrap"><span style="color:var(--gr)">&#9632; window</span><span style="color:var(--am)">&#9632; in flight</span><span style="color:#6cb6ff">&#9632; RTT (ms, scaled)</span><span style="color:var(--rd)">&#9632; loss %</span></div></div>
 <div class="box" style="flex:1;display:flex;flex-direction:column;min-height:0"><h2>Protocol log</h2><div id="log"></div></div>
 </aside></main>
 <script>
@@ -43,10 +44,16 @@ const m=$('msgs'),near=m.scrollHeight-m.scrollTop-m.clientHeight<80;
 m.innerHTML=s.msgs.map(x=>`<div class="m ${x.mine?'me':''}">${esc(x.text)}<small>#${x.seq} · ${x.t}${x.mine?(x.delivered?' · ✓ delivered':' · sending...'):''}</small></div>`).join('');if(near)m.scrollTop=m.scrollHeight;
 $('s1').textContent=s.stats.sent;$('s2').textContent=s.stats.dropped;$('s3').textContent=s.stats.retx;
 $('win').textContent=`in flight ${s.next-s.base} / window ${s.window}  cwnd ${s.cwnd}  queued ${s.queued}`+((s.mode==='smart'||s.mode==='deep')?`  last action ${s.last_action}`+(s.agent_ok?'':' (no Q-table!)'):'');
-if(document.activeElement!==$('mode'))$('mode').value=s.mode;
+draw(s.hist||[]);if(document.activeElement!==$('mode'))$('mode').value=s.mode;
 $('bres').textContent=s.bulk?(s.bulk.done?`${s.bulk.total} msgs in ${s.bulk.elapsed} s (${s.bulk.mode})`:`running... ${s.bulk.elapsed} s (${s.bulk.mode})`):'';
 if(!sliderTouched){$('loss').value=s.loss;$('lv').textContent=s.loss}
 const l=$('log'),ln=l.scrollHeight-l.scrollTop-l.clientHeight<40;l.innerHTML=s.log.map(e=>`<div class="${e.kind}">${e.t} ${esc(e.text)}</div>`).join('');if(ln)l.scrollTop=l.scrollHeight}catch(e){}}
+function draw(hs){const c=$('cv'),g=c.getContext('2d'),W=c.width,H=c.height;g.clearRect(0,0,W,H);
+g.strokeStyle='#243040';g.lineWidth=1;for(let i=0;i<=4;i++){const y=H*i/4;g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke()}
+if(hs.length<2)return;const t1=hs[hs.length-1].t,t0=Math.max(0,t1-60),X=t=>(t-t0)/Math.max(1,t1-t0)*W;
+const rmax=Math.max(100,...hs.map(h=>h.rtt)),line=(f,mx,col)=>{g.strokeStyle=col;g.lineWidth=2;g.beginPath();hs.forEach((h,i)=>{const x=X(h.t),y=H-4-(H-8)*Math.min(1,f(h)/mx);i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke()};
+line(h=>h.win,32,'#39ff88');line(h=>h.fl,32,'#ffb000');line(h=>h.rtt,rmax,'#6cb6ff');line(h=>h.loss,60,'#ff6b6b');
+g.fillStyle='#8b98a5';g.font='10px monospace';g.fillText('32 pkts / '+rmax+' ms / 60 %',4,11)}
 function esc(t){return t.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 $('f').onsubmit=async e=>{e.preventDefault();const v=$('t').value;if(!v.trim())return;const r=await (await fetch('/send',{method:'POST',body:JSON.stringify({text:v})})).json();if(r.ok)$('t').value='';tick()};
 $('loss').oninput=e=>{sliderTouched=true;$('lv').textContent=e.target.value;fetch('/loss',{method:'POST',body:JSON.stringify({loss:+e.target.value})})};
