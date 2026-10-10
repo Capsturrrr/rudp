@@ -63,3 +63,9 @@ fuzz:
 	$(CC) -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -o $(BIN_DIR)/fuzz_unpack tests/fuzz_unpack.c $(COMMON_SRC)
 	$(BIN_DIR)/fuzz_unpack 1000000
 .PHONY: fuzz
+
+# User-space UDP impairment proxy (delay / jitter / loss / bottleneck rate + drop-tail queue) for tests over real sockets
+$(BIN_DIR)/impair: $(SRC_DIR)/impair.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) -O2 -o $@ $<
+impair: $(BIN_DIR)/impair
+.PHONY: impair

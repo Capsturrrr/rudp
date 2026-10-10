@@ -26,10 +26,10 @@
 #include "deep_cc.h"
 
 #define PKT_BYTES 40
-#define MAXN 4096
+#define MAXN 65536   /* 32 MB of 512-byte chunks in file mode */
 #define QCAP 8192
 
-typedef struct { double t; int len; uint8_t buf[80]; } pend_t;
+typedef struct { double t; int len; uint8_t buf[RUDP_HEADER_SIZE + MAX_PAYLOAD]; } pend_t;
 typedef struct { pend_t *a; int head, tail; } ring_t;
 
 static double now_ms(void) {
@@ -102,7 +102,7 @@ static double rev_path(double now) {
 
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
-    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1;
+    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
     int use_sack = 1; double hyb = -1.0, ss0 = 16.0; int guard = 0, cap_set = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
@@ -114,6 +114,7 @@ int main(int argc, char **argv) {
         else if (ARG("--rate")) rate_pps = atof(argv[++i]);
         else if (ARG("--queue")) queue_cap = atoi(argv[++i]);
         else if (ARG("--packets")) npk = atoi(argv[++i]);
+        else if (ARG("--file")) fpath = argv[++i];
         else if (ARG("--seed")) seed = (unsigned)atoi(argv[++i]);
         else if (ARG("--qfile")) qfile = argv[++i];
         else if (ARG("--train")) train = atoi(argv[++i]);
@@ -187,11 +188,25 @@ int main(int argc, char **argv) {
     static rudp_packet_t pk[MAXN];
     static double sent_at[MAXN]; static uint8_t retx_flag[MAXN], sacked[MAXN];
     uint32_t base_seq = cseq + 1;
+    FILE *ff = NULL;
+    if (fpath) {                                   /* file mode: send a real file in 512-byte chunks */
+        ff = fopen(fpath, "rb"); if (!ff) { perror(fpath); return 1; }
+        fseek(ff, 0, SEEK_END); long sz = ftell(ff); fseek(ff, 0, SEEK_SET);
+        if (sz <= 0 || sz > (long)MAXN * MAX_PAYLOAD) { fprintf(stderr, "file must be 1 byte to %d MB\n", MAXN * MAX_PAYLOAD >> 20); return 1; }
+        npk = (int)((sz + MAX_PAYLOAD - 1) / MAX_PAYLOAD);
+    }
     for (int i = 0; i < npk; i++) {
         memset(&pk[i], 0, sizeof pk[i]);
-        pk[i].seq_num = base_seq + (uint32_t)i; pk[i].flags = FLAG_DATA; pk[i].payload_len = PKT_BYTES;
-        for (int j = 0; j < PKT_BYTES; j++) pk[i].payload[j] = (uint8_t)('A' + (i + j) % 26);
+        pk[i].seq_num = base_seq + (uint32_t)i; pk[i].flags = FLAG_DATA;
+        if (ff) {
+            size_t got = fread(pk[i].payload, 1, MAX_PAYLOAD, ff); pk[i].payload_len = (uint16_t)got; fbytes += (long)got;
+            for (size_t j = 0; j < got; j++) { ffnv ^= pk[i].payload[j]; ffnv *= 1099511628211ULL; }
+        } else {
+            pk[i].payload_len = PKT_BYTES;
+            for (int j = 0; j < PKT_BYTES; j++) pk[i].payload[j] = (uint8_t)('A' + (i + j) % 26);
+        }
     }
+    if (ff) { fclose(ff); printf("FILE bytes=%ld fnv1a=%016llx packets=%d\n", fbytes, (unsigned long long)ffnv, npk); }
     ring_t fwd = { malloc(sizeof(pend_t) * QCAP), 0, 0 }, rev = { malloc(sizeof(pend_t) * QCAP), 0, 0 };
 
     FILE *tr = trace ? fopen(trace, "w") : NULL;

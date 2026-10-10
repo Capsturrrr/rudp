@@ -88,8 +88,15 @@ int main(void) {
     uint32_t expected_seq = 0;   /* Go-Back-N: next in-order seq we want from client */
     char reassembled[65536];
     size_t reassembled_len = 0;
+    /* file mode: RUDP_OUT=path writes the delivered byte stream to a file; RUDP_QUIET=1 silences the per-packet log */
+    FILE *out_fp = NULL; const char *out_path = getenv("RUDP_OUT"); int quiet = getenv("RUDP_QUIET") != NULL;
+    uint64_t fnv = 1469598103934665603ULL; unsigned long long out_bytes = 0;
+    (void)quiet;
+#define DELIVER(ptr, n) do { if (out_fp) { fwrite((ptr), 1, (n), out_fp); } \
+        for (size_t k_ = 0; k_ < (size_t)(n); k_++) { fnv ^= ((const uint8_t *)(ptr))[k_]; fnv *= 1099511628211ULL; } out_bytes += (n); } while (0)
 
     srand((unsigned int)time(NULL));
+
 
     while (1) {
         ssize_t n = recvfrom(sockfd, recv_buf, sizeof(recv_buf), 0,
@@ -119,6 +126,7 @@ int main(void) {
             server_seq = (uint32_t)rand();
             expected_seq = client_seq + 1; /* first DATA packet will carry this seq */
             reassembled_len = 0;
+            if (out_path && !out_fp) { out_fp = fopen(out_path, "wb"); if (!out_fp) perror("RUDP_OUT"); fnv = 1469598103934665603ULL; out_bytes = 0; }
 
             rudp_packet_t reply;
             memset(&reply, 0, sizeof(reply));
@@ -145,7 +153,8 @@ int main(void) {
                     memcpy(reassembled + reassembled_len, pkt.payload, pkt.payload_len);
                     reassembled_len += pkt.payload_len;
                 }
-                printf("ACCEPTED seq=%u (%u bytes)\n", pkt.seq_num, pkt.payload_len);
+                DELIVER(pkt.payload, pkt.payload_len);
+                if (!quiet) printf("ACCEPTED seq=%u (%u bytes)\n", pkt.seq_num, pkt.payload_len);
                 expected_seq++;
                 while (sack_have[expected_seq % SRW]) {          /* buffered packets that are now in order */
                     int slot = (int)(expected_seq % SRW);
@@ -153,6 +162,7 @@ int main(void) {
                         memcpy(reassembled + reassembled_len, sack_buf[slot], sack_len[slot]);
                         reassembled_len += sack_len[slot];
                     }
+                    DELIVER(sack_buf[slot], sack_len[slot]);
                     sack_have[slot] = 0; expected_seq++;
                 }
             } else if (pkt.seq_num > expected_seq && pkt.seq_num - expected_seq < SRW) {
@@ -161,9 +171,9 @@ int main(void) {
                     memcpy(sack_buf[slot], pkt.payload, pkt.payload_len); sack_len[slot] = pkt.payload_len;
                     sack_have[slot] = 1;
                 }
-                printf("BUFFERED seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
+                if (!quiet) printf("BUFFERED seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
             } else {
-                printf("DUPLICATE seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
+                if (!quiet) printf("DUPLICATE seq=%u (expected %u)\n", pkt.seq_num, expected_seq);
             }
             {
                 rudp_packet_t ack;
@@ -174,7 +184,7 @@ int main(void) {
                 ack.payload_len = SRW / 8;                       /* bit j set = packet expected_seq + j is held */
                 for (int j = 1; j < SRW; j++) if (sack_have[(expected_seq + (uint32_t)j) % SRW]) ack.payload[j / 8] |= (uint8_t)(1u << (j % 8));
                 send_packet(sockfd, &ack, &client_addr, client_len);
-                printf("  -> ACK %u + sack bitmap\n\n", expected_seq);
+                if (!quiet) printf("  -> ACK %u + sack bitmap\n\n", expected_seq);
             }
 #else
             if (pkt.seq_num == expected_seq) {
@@ -185,6 +195,7 @@ int main(void) {
                 }
                 printf("ACCEPTED seq=%u (%u bytes): \"%.*s\"\n",
                        pkt.seq_num, pkt.payload_len, pkt.payload_len, pkt.payload);
+                DELIVER(pkt.payload, pkt.payload_len);
                 expected_seq++;
 
                 rudp_packet_t ack;
@@ -218,8 +229,10 @@ int main(void) {
             ack.flags = FLAG_ACK;
             send_packet(sockfd, &ack, &client_addr, client_len);
 
-            printf("Connection closed. Full message reassembled (%zu bytes):\n\"%.*s\"\n\n",
-                   reassembled_len, (int)reassembled_len, reassembled);
+            if (out_path) { if (out_fp) fflush(out_fp); printf("TRANSFER bytes=%llu fnv1a=%016llx\n", out_bytes, (unsigned long long)fnv); fflush(stdout); }
+            else printf("Connection closed. Full message reassembled (%zu bytes):\n\"%.*s\"\n\n",
+                   reassembled_len, (int)(reassembled_len > 4000 ? 4000 : reassembled_len), reassembled);
+            fnv = 1469598103934665603ULL; out_bytes = 0; if (out_fp) { fclose(out_fp); out_fp = NULL; }
 
             state = STATE_LISTEN;
             printf("State: %s (ready for new connection)\n\n", state_name(state));
