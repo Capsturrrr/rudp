@@ -3,7 +3,7 @@ Window controllers shared by the web chat gateway and the offline trainer/simula
 Modes: fixed (8), aimd (rule), smart (tabular Q-learning, same 80 states / 5 actions as src/rl_cc.h).
 All time is passed in, so the same code runs in real time and in a simulator.
 """
-import math, random
+import math, os, random
 
 RL_MULT = [0.5, 0.85, 1.0, 1.15, 1.5]
 CWND_MAX = 32.0
@@ -40,6 +40,8 @@ LAG = 1
 MASK = True
 DELAY_W = 0.5          # weight of the RTT-inflation penalty in the reward
 RANDOM_LOSS_RATIO = 0.0   # >0: loss with RTT inflation below this ratio is treated as non-congestive (no shrink)
+HYBRID = float(os.environ.get("RUDP_HYBRID", "0"))     # deep mode: hand control to AIMD while the per-interval loss fraction is >= this (0 = off, 0.10 recommended)
+TIMEOUT_CUT = float(os.environ.get("RUDP_TCUT", "0"))        # deep/smart modes: on a retransmission timeout multiply the window by this (0 = off). Safety net borrowed from AIMD.
 FEAT_ZERO = ()         # feature indices blanked out (ablation studies only)
 
 def deep_feat(ratio, loss, cwnd, thr, last_a):
@@ -70,6 +72,7 @@ class Controller:
         self.hist = []
         self.prev = None
         self.prev_a = 2
+        self.guard = 0
         self.last_action = "-"
         self.note = None
 
@@ -89,12 +92,18 @@ class Controller:
             self.iv_rtts.append(r)
             self.srtt = r if self.srtt is None else 0.875 * self.srtt + 0.125 * r
             self.min_rtt = r if self.min_rtt is None else min(self.min_rtt, r)
-        if self.mode == "aimd":
+        if self.mode == "aimd" or self.guard > 0:
             for _ in range(n_acked):
                 self.cwnd = min(CWND_MAX, self.cwnd + (1.0 if self.cwnd < self.ssthresh else 1.0 / self.cwnd))
 
     def on_loss(self, kind):
         self.iv_lossev += 1
+        if self.guard > 0:
+            self.ssthresh = max(2.0, self.cwnd / 2)
+            self.cwnd = 1.0 if kind == "timeout" else self.ssthresh
+            return
+        if kind == "timeout" and TIMEOUT_CUT > 0 and self.mode in ("deep", "smart"):
+            self.cwnd = max(2.0, self.cwnd * TIMEOUT_CUT)
         if self.mode == "aimd":
             self.ssthresh = max(2.0, self.cwnd / 2)
             self.cwnd = 1.0 if kind == "timeout" else self.ssthresh
@@ -116,6 +125,11 @@ class Controller:
         loss = min(1.0, lossev / max(1, new))
         peak = max(1.0, CWND_MAX * dur / max(base, 0.02))
         thr = min(1.0, acked / peak)
+        if deep and HYBRID > 0:
+            if loss >= HYBRID: self.guard = 3
+            elif self.guard > 0: self.guard -= 1
+            if self.guard > 0:
+                self.last_action = "AIMD"; self.note = f"deep: loss {loss*100:.0f}% -> AIMD in control, cwnd {self.cwnd:.1f}"; return
         allowed = range(5)
         if MASK and loss == 0 and ratio < 1.5:
             allowed = (2, 3, 4)          # no congestion signal: never shrink the window

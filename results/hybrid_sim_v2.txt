@@ -1,0 +1,10 @@
+70 paths, 300 packets, simulator v2 (in-order jitter, realistic recovery, adaptive RTO)
+  fixed        mean   58.20 median  35.76 vs aimd faster 25 slower 35
+  aimd         mean   49.32 median  41.42 vs aimd faster 0 slower 0
+  deep         mean   73.34 median  92.06 vs aimd faster 21 slower 41
+  hybrid 0.05  mean   52.21 median  44.24 vs aimd faster 26 slower 30
+  hybrid 0.10  mean   52.96 median  43.61 vs aimd faster 25 slower 31
+  loss 0.000-0.011 n=18 fixed   24.4 aimd   20.2 deep   26.3 hybrid 0.05   22.0 hybrid 0.10   21.8
+  loss 0.011-0.080 n=19 fixed   26.5 aimd   31.0 deep   46.5 hybrid 0.05   28.7 hybrid 0.10   28.4
+  loss 0.080-0.160 n=14 fixed   62.5 aimd   38.8 deep  106.9 hybrid 0.05   44.6 hybrid 0.10   48.9
+  loss 0.160-0.310 n=19 fixed  118.8 aimd  103.0 deep  120.0 hybrid 0.05  110.0 hybrid 0.10  110.1

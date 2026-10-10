@@ -250,7 +250,10 @@ if __name__ == "__main__":
     ap.add_argument("--name", default="me"); ap.add_argument("--http", type=int, default=8080)
     ap.add_argument("--loss", type=int, default=0); ap.add_argument("--delay", type=int, default=0, help="emulated one-way delay in ms")
     ap.add_argument("--rto", choices=["fixed", "adaptive"], default="fixed", help="retransmission timeout: fixed 300 ms (default) or RFC 6298 adaptive")
+    ap.add_argument("--tcut", type=float, default=0.0, help="agent safety net: multiply the window by this on a retransmission timeout (0 = off, 0.25 recommended)")
+    ap.add_argument("--hybrid", type=float, default=0.0, help="neural agent hands control to AIMD while the loss fraction per interval is >= this (0 = off, 0.10 recommended)")
     a = ap.parse_args()
+    import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid
     import os
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
     chat = Chat(a.udp, a.peer, a.name, a.loss, a.delay)

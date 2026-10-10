@@ -30,5 +30,12 @@ check(abs(c.cwnd - w / 2) < 1e-9, "AIMD halves the window on duplicate ACKs")
 t_clean = run(ctrl("aimd"), 0.0, 0.04, seed=1); t_lossy = run(ctrl("aimd"), 0.2, 0.04, seed=1)
 check(t_lossy > t_clean, "loss makes delivery slower")
 check(len(net.q([0, 0, 0.3, 0.5, 0.0])) == 5, "neural agent outputs 5 action values")
+import cc as _cc
+_cc.HYBRID = 0.10
+c = ctrl("deep"); c.guard = 3; c.cwnd = 20.0; c.on_loss("timeout")
+check(c.cwnd == 1.0, "hybrid: AIMD is in control after heavy loss (window reset on timeout)")
+c = ctrl("deep"); tt = run(c, 0.3, 0.03, n_msgs=40, seed=2, max_t=60)
+check(tt < 60.0, "hybrid delivers 40 messages at 30% loss")
+_cc.HYBRID = 0.0
 print("all simulator tests passed" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

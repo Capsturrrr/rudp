@@ -59,6 +59,7 @@ make test        # wire format, end-to-end delivery over UDP, all controller mod
 `eval_ci3.sh` with `ci_summary*.py`.
 `web/fairness_test.py` (two flows sharing a bottleneck, Jain index; results in `results/fairness.txt`) and
 `eval_ci4.sh` + `ci_summary4.py` (C transport with equal window caps), `RUDP_RG=1` (simulator with the realistic fast-retransmit rule; results/stress_rg.txt), and
+`--hybrid 0.10` (neural agent hands over to AIMD under heavy loss; `eval_ci5.sh`, `eval_ci6.sh`, results/eval_ci6_summary.txt), and
 `web/ablate.py` (retrains the neural agent with one design choice removed; `results/ablation.txt`). Real kernel TCP/UDP on netem (Linux, root): `netem_baselines.sh`.
 
 ## RUDP Chat (demo application)

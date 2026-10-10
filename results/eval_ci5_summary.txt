@@ -1,0 +1,20 @@
+5g     aimd32   n=10 time   1.55 s +/- 0.10   sent   1287
+5g     deep     n=10 time   1.18 s +/- 0.03   sent   1262
+5g     deepcut  n=10 time   1.17 s +/- 0.02   sent   1271
+       paired deep - aimd32: -0.37 s +/- 0.11 (significant)
+       paired deepcut - aimd32: -0.38 s +/- 0.11 (significant)
+lossy  aimd32   n=10 time   9.04 s +/- 0.52   sent   1462
+lossy  deep     n=10 time   7.04 s +/- 2.15   sent   1832
+lossy  deepcut  n=10 time  24.06 s +/- 4.77   sent   1429
+       paired deep - aimd32: -2.00 s +/- 2.18 (not significant)
+       paired deepcut - aimd32: +15.02 s +/- 4.85 (significant)
+sat    aimd32   n=10 time  19.11 s +/- 1.97   sent   1292
+sat    deep     n=10 time  13.56 s +/- 0.39   sent   1336
+sat    deepcut  n=10 time  13.71 s +/- 0.71   sent   1338
+       paired deep - aimd32: -5.55 s +/- 1.76 (significant)
+       paired deepcut - aimd32: -5.40 s +/- 1.57 (significant)
+bad    aimd32   n= 5 time  12.08 s +/- 5.87   sent    471
+bad    deep     n= 5 time  85.40 s +/- 23.36   sent   1310
+bad    deepcut  n= 5 time  19.36 s +/- 7.74   sent    752
+       paired deep - aimd32: +73.32 s +/- 27.23 (significant)
+       paired deepcut - aimd32: +7.29 s +/- 8.55 (not significant)

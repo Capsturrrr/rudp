@@ -103,7 +103,7 @@ static double rev_path(double now) {
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
     int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1;
-    int use_sack = 0; double eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
+    int use_sack = 0; double hyb = 0.0; int guard = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
         if (ARG("--mode")) mode = argv[++i];
@@ -127,6 +127,8 @@ int main(int argc, char **argv) {
         else if (ARG("--reorder")) reorder = atoi(argv[++i]);
         else if (ARG("--sack")) use_sack = atoi(argv[++i]);
         else if (ARG("--init")) init_cwnd = atof(argv[++i]);
+        else if (ARG("--tcut")) tcut = atof(argv[++i]);
+        else if (ARG("--hybrid")) hyb = atof(argv[++i]);   /* agent hands control to AIMD while the per-interval loss fraction is >= X (e.g. 0.05) */
         else if (ARG("--dfile")) dfile = argv[++i];
         else { fprintf(stderr, "bad arg %s\n", argv[i]); return 2; }
     }
@@ -250,7 +252,7 @@ int main(int argc, char **argv) {
                     rto = srtt + 4 * rttvar; if (rto < 60) rto = 60; if (rto > 3000) rto = 3000;
                 }
                 iv_acked += newly; base = nb; dup = 0; last_ack = a;
-                if (!use_rl && !chat) {
+                if ((!use_rl && !chat) || guard > 0) {
                     for (int k = 0; k < newly; k++) {
                         if (cwnd < ssthresh) cwnd += 1.0; else cwnd += 1.0 / cwnd;
                     }
@@ -262,7 +264,7 @@ int main(int argc, char **argv) {
                 dup++;
                 if (dup >= DUP_ACK_THRESHOLD && base > recover) {
                     recover = next - 1; fast_retx++; iv_lossev++;
-                    if (!use_rl && !chat) {
+                    if ((!use_rl && !chat) || guard > 0) {
                         ssthresh = cwnd / 2; if (ssthresh < 1) ssthresh = 1; cwnd = ssthresh;
                     }
                     { int hi = next; if (use_sack) { hi = base + 1; for (int i = base; i < next; i++) if (sacked[i]) hi = i; }
@@ -276,7 +278,7 @@ int main(int argc, char **argv) {
         if (timer_on && base < npk && now - timer_start >= rto) {
             timeouts++; iv_lossev++;
             ssthresh = cwnd / 2; if (ssthresh < 2) ssthresh = 2;
-            if (chat) { /* the chat-style agents leave the window to the policy */ } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
+            if (chat && guard > 0) { cwnd = 1.0; /* hybrid: AIMD is in control */ } else if (chat) { /* the chat-style agents leave the window to the policy; --tcut X adds an AIMD-style safety net: window x X on a timeout */ if (tcut > 0) { cwnd *= tcut; if (cwnd < 2) cwnd = 2; } } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
             rto = rto * 2 > 3000 ? 3000 : rto * 2;
             recover = next - 1; dup = 0;
             for (int i = base; i < next; i++) if (!(use_sack && sacked[i])) TX(i, 1);
@@ -298,16 +300,17 @@ int main(int argc, char **argv) {
                     double bs = base_r / 1000.0; if (bs < 0.02) bs = 0.02;
                     double peak = 32.0 * dur / bs; if (peak < 1) peak = 1;
                     double thr = ac / peak; if (thr > 1) thr = 1;
+                    if (hyb > 0 && use_deep) { if (lossf >= hyb) guard = 3; else if (guard > 0) guard--; }
                     int lo = (lossf == 0 && ratio < 1.5) ? 2 : 0;           /* no congestion signal: never shrink */
                     int act;
-                    if (use_deep) {
+                    if (guard > 0) { if (tr) fprintf(tr, "%.1f,GUARD,%.2f,%.1f\n", now - t0, cwnd, srtt); }
+                    else if (use_deep) {
                         double x[DN_IN] = { (ratio - 1.0 > 3.0 ? 3.0 : ratio - 1.0) / 3.0, (lossf > 0.3 ? 0.3 : lossf) / 0.3, cwnd / 32.0, thr, RL_MULT[last_act] - 1.0 }, q[DN_OUT];
                         deep_forward(&dnet, x, q); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (q[k] > q[act]) act = k;
                     } else {
                         int s2 = rl_state(ratio, lossf, cwnd); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (ag.q[s2][k] > ag.q[s2][act]) act = k;
                     }
-                    cwnd *= RL_MULT[act]; if (cwnd < 2) cwnd = 2; if (cwnd > maxcwnd) cwnd = maxcwnd;
-                    last_act = act;
+                    if (guard == 0) { cwnd *= RL_MULT[act]; if (cwnd < 2) cwnd = 2; if (cwnd > maxcwnd) cwnd = maxcwnd; last_act = act; }
                     if (tr) fprintf(tr, "%.1f,RL_%d,%.2f,%.1f\n", now - t0, act, cwnd, srtt);
                 }
             }
