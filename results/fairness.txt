@@ -1,0 +1,24 @@
+
+congestion only: 150 pkt/s, queue 30, no random loss  (300 packets per flow, 20 seeds)
+  pair            share of flow A  Jain index   A time   B time
+  aimd vs aimd               52 %       0.998    12.2s    13.2s
+  deep vs deep               56 %       0.984    18.9s    20.8s
+  deep vs aimd               44 %       0.987    17.9s    14.3s
+  smart vs aimd              38 %       0.948     4.8s     3.3s
+  fixed vs aimd              29 %       0.845     4.9s     2.9s
+
+congestion + 2% random loss  (300 packets per flow, 20 seeds)
+  pair            share of flow A  Jain index   A time   B time
+  aimd vs aimd               50 %       0.990     9.6s     9.7s
+  deep vs deep               55 %       0.921    17.4s    19.4s
+  deep vs aimd               60 %       0.952    15.8s    18.3s
+  smart vs aimd              54 %       0.965    11.2s    12.1s
+  fixed vs aimd              62 %       0.944    14.6s    17.3s
+
+long path: 150 pkt/s, 120 ms, queue 60  (300 packets per flow, 20 seeds)
+  pair            share of flow A  Jain index   A time   B time
+  aimd vs aimd               51 %       0.999    50.6s    52.4s
+  deep vs deep               59 %       0.969    26.6s    34.4s
+  deep vs aimd               74 %       0.819    25.6s    31.2s
+  smart vs aimd              61 %       0.953    22.4s    31.8s
+  fixed vs aimd              72 %       0.843     9.8s    25.5s

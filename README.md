@@ -56,7 +56,9 @@ make test        # wire format, end-to-end delivery over UDP, all controller mod
 
 `python3 web/stress.py` (48 unseen paths), `web/baselines.py` (plain UDP and a TCP model), `web/sack_test.py`,
 `web/reorder_test.py`, `web/train_deep.py`. Repeated C runs with confidence intervals: `eval_ci.sh`, `eval_ci2.sh`,
-`eval_ci3.sh` with `ci_summary*.py`. Real kernel TCP/UDP on netem (Linux, root): `netem_baselines.sh`.
+`eval_ci3.sh` with `ci_summary*.py`.
+`web/fairness_test.py` (two flows sharing a bottleneck, Jain index; results in `results/fairness.txt`) and
+`web/ablate.py` (retrains the neural agent with one design choice removed; `results/ablation.txt`). Real kernel TCP/UDP on netem (Linux, root): `netem_baselines.sh`.
 
 ## RUDP Chat (demo application)
 
@@ -71,6 +73,9 @@ make chat
 
 Type in either terminal. Lines in grey brackets show what the network lost and what RUDP did about it;
 every message still arrives, complete and in order. Ctrl+D quits and prints statistics.
+
+The web version (`web/rudp_web.py`, see `docs/CHAT_ONLINE.txt`) adds a live dashboard (window, in flight, RTT, loss over
+the last 60 s) and `--rto adaptive` for an RFC 6298 retransmission timer with backoff (default stays fixed 300 ms).
 
 ## Network design (Cisco Packet Tracer)
 
