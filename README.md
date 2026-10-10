@@ -25,6 +25,7 @@ same timers, paired seeds, 95% intervals. Details and caveats in `docs/RUDP_Fina
 * The same ordering holds on **real UDP sockets** through an impairment proxy (`eval_proxy.sh`) and in a **virtual-time build of the same
   sender** (`--vt 1`, calibrated against the real-clock runs in 15 of 15 cells).
 * On **100 random held-out paths** the agent needs 0.53x the time of tuned AIMD, is faster on 89 and never more than 20% slower (`web/vt_random.py`).
+* Fairness knob: `--polite 1.3` makes the agent back off when a standing queue builds. Against tuned AIMD its share of a shared link falls from 69% to about 45-50%; the cost is an average of 0.58x instead of 0.53x of AIMD's time, with a worst path 2.95x slower (`results/polite_summary.txt`). Off by default.
 * Honest limits: on a shared bottleneck it takes 68% of the link against tuned AIMD (not a polite neighbour); no gain on the 10% loss path;
   no kernel netem or multi-machine test yet (`netem_baselines.sh` is provided). Earlier, larger margins were inflated by a timer defect that hurt
   the baseline more; it is fixed and every number above is re-measured.

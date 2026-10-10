@@ -1,130 +1,42 @@
-<title>RUDP Demo Runbook</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<style>
-/* Layout: sticky tab strip of demos; each demo is a short list of steps with copyable commands. */
-:root{--bg:#f6f7f4;--panel:#ffffff;--fg:#1b2420;--mute:#5d6b64;--line:#d9dfda;--accent:#0b7a4b;--accent-fg:#ffffff;--code:#eef2ee;--warn:#9a5b00;--warn-bg:#fff4dc;
---sans:'IBM Plex Sans',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,Menlo,monospace}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1512;--panel:#161e1a;--fg:#e4ece7;--mute:#8fa097;--line:#2a362f;--accent:#3ddc84;--accent-fg:#06210f;--code:#0c120f;--warn:#ffc46b;--warn-bg:#2a2112;color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#0f1512;--panel:#161e1a;--fg:#e4ece7;--mute:#8fa097;--line:#2a362f;--accent:#3ddc84;--accent-fg:#06210f;--code:#0c120f;--warn:#ffc46b;--warn-bg:#2a2112;color-scheme:dark}
-body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.55;padding-inline:16px;padding-block:20px 48px}
-.wrap{max-width:860px;margin:0 auto}
-h1{font-size:1.6rem;margin:0 0 4px;text-wrap:balance}
-.sub{color:var(--mute);margin:0 0 18px}
-nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
-nav button{font:inherit;font-size:.88rem;padding:7px 12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:6px;cursor:pointer}
-nav button[aria-selected="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-section{display:none}section.on{display:block}
-h2{font-size:1.2rem;margin:0 0 4px}
-.goal{color:var(--mute);margin:0 0 14px}
-ol{list-style:none;counter-reset:s;margin:0;padding:0;display:grid;gap:12px}
-li{counter-increment:s;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px 12px 48px;position:relative;min-width:0}
-li::before{content:counter(s);position:absolute;left:14px;top:12px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--accent-fg);font-weight:600;font-size:.85rem;display:grid;place-items:center}
-li p{margin:0 0 6px}
-.cmd{display:flex;gap:8px;align-items:flex-start;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:8px 8px 8px 10px;margin-top:6px;min-width:0}
-.cmd pre{margin:0;flex:1;min-width:0;overflow-x:auto;font-family:var(--mono);font-size:.82rem;line-height:1.5;white-space:pre}
-.cmd button{font:inherit;font-size:.75rem;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:4px;padding:3px 8px;cursor:pointer;flex:none}
-.say,.warn{margin:12px 0 0;padding:10px 12px;border-radius:6px;font-size:.9rem}
-.say{border:1px dashed var(--line)}
-.say b{color:var(--accent)}
-.warn{background:var(--warn-bg);color:var(--warn)}
-code{font-family:var(--mono);font-size:.85em;background:var(--code);padding:1px 5px;border-radius:3px}
-.tt{margin-left:auto;font:inherit;font-size:.8rem;color:var(--mute);background:none;border:1px solid var(--line);border-radius:6px;padding:7px 10px;cursor:pointer}
-</style>
-<div class="wrap">
-<h1>RUDP Demo Runbook</h1>
-<p class="sub">Run each part of the project, in review order. Commands run from the project folder (<code>cd rudp</code>) in WSL or Linux.</p>
-<nav role="tablist" id="tabs"></nav>
-
-<section id="d0"><h2>0. Setup</h2><p class="goal">Do this once, before you walk in.</p><ol>
-<li><p>Get the code and build everything.</p><div class="cmd"><pre>git clone https://github.com/Capsturrrr/rudp && cd rudp
-git pull
-make && make smart chat</pre></div></li>
-<li><p>Check the three programs exist.</p><div class="cmd"><pre>ls bin</pre></div><p>You should see <code>server client smart_client chat</code>.</p></li>
-<li><p>Open the slides, Packet Tracer file and Wireshark in separate windows so you only switch, not launch.</p></li>
-</ol><div class="warn">Open the web chat with <code>http://</code>, not <code>https://</code>, or Chrome shows ERR_SSL_PROTOCOL_ERROR.</div></section>
-
-<section id="d1"><h2>1. Base RUDP with packet loss</h2><p class="goal">Show handshake, data, ACKs, retransmission and the congestion window.</p><ol>
-<li><p>Terminal 1: start the server.</p><div class="cmd"><pre>./bin/server</pre></div></li>
-<li><p>Terminal 2: run the client with 10% simulated loss.</p><div class="cmd"><pre>./bin/client 10</pre></div></li>
-<li><p>Point at the log: SYN/SYN-ACK, <code>ACK … cwnd=</code>, slow start turning into congestion avoidance, <code>ssthresh</code> dropping after a loss, and the final line "All 62 packets delivered".</p></li>
-</ol><div class="say"><b>Say:</b> every packet is numbered and checksummed; lost ones are resent; the window grows after each ACK and halves on loss.</div></section>
-
-<section id="d2"><h2>2. AIMD vs Smart-RUDP</h2><p class="goal">Run the same lossy path with both window controllers.</p><ol>
-<li><p>Terminal 1: build and start a server on its own port.</p><div class="cmd"><pre>gcc -DSERVER_PORT=9301 -o bin/server_9301 src/server.c src/common.c
-./bin/server_9301</pre></div></li>
-<li><p>Terminal 2: AIMD baseline.</p><div class="cmd"><pre>./bin/smart_client --mode aimd --port 9301 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 500 --seed 3 --qfile results/q_lossy.txt --train 0 --emu 1</pre></div></li>
-<li><p>Same command with the learned controller.</p><div class="cmd"><pre>./bin/smart_client --mode rl --port 9301 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 500 --seed 3 --qfile results/q_lossy.txt --train 0 --emu 1</pre></div></li>
-<li><p>Read the <code>RESULT</code> line: the fourth value is time in ms, then packets sent and retransmissions.</p></li>
-</ol><div class="warn">One seed on one path is an illustration only. If asked who wins in general, quote the experiments (Section 8: tied on lossy, slower on 5G-like and satellite-like) and the 48-path chat stress test.</div></section>
-
-<section id="d3"><h2>3. Terminal chat</h2><p class="goal">Two people messaging over RUDP packets.</p><ol>
-<li><p>Terminal 1.</p><div class="cmd"><pre>./bin/chat 7001 127.0.0.1:7002 Harsh 20</pre></div></li>
-<li><p>Terminal 2.</p><div class="cmd"><pre>./bin/chat 7002 127.0.0.1:7001 Rohit 20</pre></div></li>
-<li><p>Wait two seconds after both start, then type in each. The last number (20) is simulated loss in percent; the status line shows sent, dropped and retransmitted counts.</p></li>
-</ol><div class="warn">Typing before the connection is up is the usual reason a first message looks lost. Wait for the NAT punch.</div></section>
-
-<section id="d4"><h2>4. Web chat on one machine</h2><p class="goal">The browser version, with the loss slider and controller switch. This is the main live demo.</p><ol>
-<li><p>Terminal 1: first participant.</p><div class="cmd"><pre>python3 web/rudp_web.py --udp 9001 --peer 127.0.0.1:9002 --name Harsh --http 8080 --loss 10 --delay 40</pre></div></li>
-<li><p>Terminal 2: second participant.</p><div class="cmd"><pre>python3 web/rudp_web.py --udp 9002 --peer 127.0.0.1:9001 --name Rohit --http 8081 --loss 10 --delay 40</pre></div></li>
-<li><p>Open both pages side by side.</p><div class="cmd"><pre>http://localhost:8080
-http://localhost:8081</pre></div></li>
-<li><p>Send a message each way. Drag the loss slider and watch the resent counter and the log.</p></li>
-<li><p>Pick <b>Fixed</b>, click "Send 60 test messages", note the time. Repeat with <b>AIMD</b>, then <b>Smart-RUDP</b>.</p></li>
-</ol><div class="say"><b>Expected on this path:</b> about 0.8 s fixed, 1.8 s AIMD, 0.7 s Smart-RUDP. Numbers vary run to run; the ordering is what to show.</div></section>
-
-<section id="d5"><h2>5. Laptop and phone over the internet</h2><p class="goal">Two real devices on different networks, linked by Tailscale.</p><ol>
-<li><p>Both devices: install Tailscale, sign in with the same account, and check both show as connected. Note each device's 100.x address.</p></li>
-<li><p>Laptop (point at the phone's address).</p><div class="cmd"><pre>python3 web/rudp_web.py --udp 9001 --peer PHONE_100.x.x.x:9001 --name Harsh --http 8080</pre></div></li>
-<li><p>Phone (Termux; point at the laptop's address).</p><div class="cmd"><pre>cd rudp && git pull
-python3 web/rudp_web.py --udp 9001 --peer LAPTOP_100.x.x.x:9001 --name Rohit --http 8080</pre></div></li>
-<li><p>Open <code>http://localhost:8080</code> on each device and chat.</p></li>
-</ol><div class="warn">If WSL sits behind Windows and nothing connects, install Tailscale inside WSL too. Keep a screenshot of this working as a fallback.</div></section>
-
-<section id="d6"><h2>6. Network: Packet Tracer and Wireshark</h2><p class="goal">The routed four-router OSPF network and the packet capture.</p><ol>
-<li><p>Packet Tracer: open the saved <code>.pkt</code>. Show the topology, then <code>show ip route</code> on R1 (OSPF routes).</p></li>
-<li><p>Failover: shut R1 Gi0/2, run a ping across, and show only 1 of 71 pings lost while traffic reroutes through R2.</p></li>
-<li><p>ACL: ping the staff PC from the student PC and show "destination unreachable".</p></li>
-<li><p>Wireshark: load the dissector, then open a capture.</p><div class="cmd"><pre>wireshark -X lua_script:network/rudp.lua network/smart_lossy_aimd.pcap</pre></div></li>
-<li><p>Apply a display filter.</p><div class="cmd"><pre>smartrudp.flags.data == 1</pre></div><p>Steps for the sequence-time graph are in <code>network/WIRESHARK_STEPS.txt</code>.</p></li>
-</ol></section>
-
-<section id="d7"><h2>7. Show the AI agent and the stress test</h2><p class="goal">The code, the learned table, and the evidence.</p><ol>
-<li><p>Open the agent source and point at the state, the choose function and the update line.</p><div class="cmd"><pre>src/rl_cc.h
-src/smart_client.c
-web/cc.py</pre></div></li>
-<li><p>Show the learned Q-values (80 rows, 5 actions).</p><div class="cmd"><pre>head -20 results/q_chat.txt</pre></div></li>
-<li><p>Run the stress test (about a minute on 2 CPUs; skip it live and quote the result if short on time).</p><div class="cmd"><pre>python3 web/stress.py results/q_chat.txt</pre></div></li>
-<li><p>Switch the chat to the neural agent: pick "Smart-RUDP (deep, neural net)" in the dropdown (the file results/dqn_chat.json is loaded automatically).</p></li>
-<li><p>Retrain from scratch, only if asked.</p><div class="cmd"><pre>python3 web/train.py</pre></div></li>
-</ol><div class="say"><b>Result to quote:</b> 48 unseen random paths, mean 3.73 s Smart-RUDP vs 7.16 s AIMD; faster on 27, slower on 5, within 5% on 16. Simulated. It is tabular Q-learning, not deep RL.</div></section>
-
-
-<section id="d8"><h2>8. Extra evidence</h2><p class="goal">Baselines, selective ACK, reordering and confidence intervals. Each prints a table in about a minute.</p><ol>
-<li><p>Plain UDP and a TCP model on the 48 unseen paths.</p><div class="cmd"><pre>python3 web/baselines.py</pre></div></li>
-<li><p>Go-Back-N versus selective acknowledgment.</p><div class="cmd"><pre>python3 web/sack_test.py</pre></div></li>
-<li><p>Reordering under jitter.</p><div class="cmd"><pre>python3 web/reorder_test.py</pre></div></li>
-<li><p>Confidence intervals for the C experiments (the full run takes about 30 minutes; show the saved results instead).</p><div class="cmd"><pre>python3 ci_summary.py</pre></div></li>
-<li><p>Real TCP, UDP and RUDP on netem (Linux only, needs sudo).</p><div class="cmd"><pre>sudo bash netem_baselines.sh lossy</pre></div></li>
-</ol><div class="warn">The TCP result is a model, not kernel TCP. Say so before she asks.</div></section>
-<section id="d9"><h2>9. Neural agent and tests in C</h2><p class="goal">The neural agent in the real transport, compared with AIMD, and the test suite.</p><ol>
-<li><p>Build and export the network weights.</p><div class="cmd"><pre>make smart sack
-python3 web/export_dqn.py</pre></div></li>
-<li><p>Terminal 1: server on its own port.</p><div class="cmd"><pre>gcc -DSERVER_PORT=9401 -o bin/server_9401 src/server.c src/common.c
-./bin/server_9401</pre></div></li>
-<li><p>Terminal 2: AIMD, then the neural agent, on the lossy path (same start window).</p><div class="cmd"><pre>./bin/smart_client --mode aimd --init 10 --port 9401 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --scenario lossy
-./bin/smart_client --mode deep --init 10 --dfile results/dqn_chat.txt --port 9401 --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --scenario lossy</pre></div><p>The fourth number in the RESULT line is the time in ms. Expect about 9 s for AIMD and 6 to 7 s for the neural agent; single runs vary, the 15-run table is in the report.</p></li>
-<li><p>Run every test.</p><div class="cmd"><pre>make test</pre></div><p>It ends with ALL TESTS PASSED.</p></li>
-</ol><div class="warn">One run is an example. The claim rests on 15 runs per scenario with 95% intervals (Table 8c).</div></section>
-<button class="tt" id="theme" type="button">Toggle theme</button>
-</div>
-<script>
-const names=['0 Setup','1 Base RUDP','2 AIMD vs Smart','3 Terminal chat','4 Web chat','5 Phone','6 Network','7 AI agent','8 Evidence','9 C agent + tests'];
-const nav=document.getElementById('tabs');
-function show(i){document.querySelectorAll('section').forEach((s,k)=>s.classList.toggle('on',k===i));nav.querySelectorAll('button').forEach((b,k)=>b.setAttribute('aria-selected',k===i));try{localStorage.setItem('rb',i)}catch(e){}}
-names.forEach((n,i)=>{const b=document.createElement('button');b.type='button';b.textContent=n;b.setAttribute('role','tab');b.onclick=()=>show(i);nav.appendChild(b)});
-document.querySelectorAll('.cmd').forEach(c=>{const b=document.createElement('button');b.type='button';b.textContent='Copy';b.onclick=async()=>{const t=c.querySelector('pre').textContent;try{await navigator.clipboard.writeText(t);b.textContent='Copied'}catch(e){const r=document.createRange();r.selectNodeContents(c.querySelector('pre'));const s=getSelection();s.removeAllRanges();s.addRange(r);b.textContent='Selected'}setTimeout(()=>b.textContent='Copy',1400)};c.appendChild(b)});
-let st=0;try{st=+localStorage.getItem('rb')||0}catch(e){}
-show(st);
-document.getElementById('theme').onclick=()=>{const r=document.documentElement;const d=r.dataset.theme==='dark'||(!r.dataset.theme&&matchMedia('(prefers-color-scheme:dark)').matches);r.dataset.theme=d?'light':'dark'};
-</script>
+<html><head><meta charset='utf-8'><style>
+@page{size:A4;margin:18mm 16mm}
+body{font-family:'DejaVu Sans',Arial,sans-serif;font-size:10.5pt;line-height:1.5;color:#1a1a1a}
+h1{font-size:24pt;margin:0 0 4pt;border-bottom:3px solid #1f6feb;padding-bottom:6pt}
+h2{font-size:15pt;margin:20pt 0 6pt;color:#1f4fa3;border-bottom:1px solid #cfd8e6;padding-bottom:3pt;page-break-after:avoid}
+p{margin:6pt 0}
+table{border-collapse:collapse;width:100%;margin:8pt 0;font-size:9.5pt;page-break-inside:auto}
+tr{page-break-inside:avoid}
+th{background:#1f4fa3;color:#fff;text-align:left;padding:5pt 6pt}
+td{border:1px solid #cfd8e6;padding:4pt 6pt;vertical-align:top}
+tr:nth-child(even) td{background:#f4f7fb}
+code{font-family:'DejaVu Sans Mono',monospace;font-size:9pt;background:#eef2f7;padding:1pt 3pt;border-radius:3px}
+pre{background:#0f1720;color:#e6edf3;padding:8pt 10pt;border-radius:5px;white-space:pre-wrap;word-break:break-all;page-break-inside:avoid}
+pre code{background:none;color:inherit;padding:0;font-size:8.8pt}
+em{color:#555}
+</style></head><body><h1>Demo run-of-show (about 10 minutes)</h1>
+<p>Team: Harshavardhan Mallela, Rohit Arya, Shloak Sinha. Before starting: Packet Tracer open with the saved <code>.pkt</code>, a WSL terminal in the repo, the report PDF and slides open. Build once: <code>make all smart chat</code> (then <code>make test</code> if you want to show the green run).</p>
+<h2>Order</h2>
+<ol>
+<li><strong>Idea (1 min), slides 2-3.</strong> UDP is unreliable, TCP is locked in the kernel, so we rebuilt TCP's core ideas over UDP: handshake, Selective Repeat with a 256-packet window, CRC-16, adaptive timer, pluggable congestion control.</li>
+<li><strong>RUDP live (1 min).</strong> Terminal 1 <code>./bin/server</code>, terminal 2 <code>./bin/client 20</code> (20% simulated loss). Point at TIMEOUT / FAST RETRANSMIT lines, then the reassembled message.</li>
+<li><strong>Chat (2 min).</strong> <code>./bin/chat 9001 9002 Alice 30</code> and <code>./bin/chat 9002 9001 Bob 30</code>. Start both terminals before typing. Messages arrive in order despite the "network lost" lines. Optional web version: <code>python3 web/rudp_web.py --udp 9001 --peer 127.0.0.1:9002 --http 8080</code>.</li>
+<li><strong>File transfer (1.5 min).</strong> <code>./filetransfer_demo.sh 2 lossy</code> sends a 2 MB random file over an impaired path with three policies and checks that the received hash matches. Expected: about 27 s, 24 s and 12 s (AIMD cap 32, AIMD tuned, neural), all byte-identical.</li>
+<li><strong>Smart-RUDP (2 min).</strong> Virtual time makes this fast and repeatable:
+   <code>./bin/smart_client --vt 1 --mode deep --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --seed 1</code>
+   then <code>python3 web/vt_named.py</code> (five named paths, 100 paired seeds). Show the headline table: neural beats tuned AIMD by 15% to 52% on four paths and ties on the 10%-loss path. Show <code>results/vt_ablation.txt</code> if asked what matters.</li>
+<li><strong>Network (2 min).</strong> Packet Tracer, four routers R1-R4, OSPF area 0. R2 <code>show ip ospf neighbor</code> (three neighbours FULL); PC <code>tracert 192.168.30.10</code>; ACL block (<code>ping 192.168.20.11</code> fails); failover (<code>ping -t</code>, shut R1 Gi0/2, tracert now goes via R2, restore with <code>no shutdown</code>). Measured: 70 of 71 pings survived the shutdown.</li>
+<li><strong>Wireshark (1 min).</strong> <code>wireshark -X lua_script:network/rudp.lua network/smart_lossy_aimd.pcap</code>; filter <code>smartrudp.flags.data == 1</code>; pick a seq with several copies to show a retransmission.</li>
+</ol>
+<h2>Backup plan</h2>
+<ul>
+<li>If a live demo misbehaves, <code>make test</code> output and the report's Section 8 hold the same evidence.</li>
+<li>If a port is busy: <code>pkill -x server</code> (never <code>pkill -f</code>).</li>
+<li>Windows cannot capture the WSL loopback: use <code>tshark -i lo</code> inside WSL, or open the supplied <code>.pcap</code> files.</li>
+</ul>
+<h2>Honest limits (say them before you are asked)</h2>
+<ul>
+<li>Packet Tracer cannot run the C programs, so the protocol and the network are validated separately.</li>
+<li>Results come from a software impairment proxy and a virtual-time build, not kernel netem: run <code>sudo bash netem_baselines.sh lossy|5g|sat|reorder</code> on WSL for that.</li>
+<li>On a shared bottleneck the neural agent takes about 68% of the link against tuned AIMD, so it is not a polite neighbour.</li>
+<li>No gain on the 10%-loss path. Earlier larger margins were inflated by a timer defect that hurt the baseline more; fixed and re-measured.</li>
+</ul></body></html>

@@ -120,7 +120,7 @@ static void vsrv_rx(ring_t *rev, double now, const uint8_t *b, int n) {
 
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
-    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; double pace = 0, pace_next = 0, vstep = 0.35, ssdeep = -1, ss_ratio = 1.3; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
+    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; double polite = 0, pace = 0, pace_next = 0, vstep = 0.35, ssdeep = -1, ss_ratio = 1.3; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
     int use_sack = 1; double hyb = -1.0, ss0 = 16.0; int guard = 0, cap_set = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
@@ -136,6 +136,7 @@ int main(int argc, char **argv) {
         else if (ARG("--vt")) vt = atoi(argv[++i]);
         else if (ARG("--vstep")) vstep = atof(argv[++i]);
         else if (ARG("--pace")) pace = atof(argv[++i]);
+        else if (ARG("--polite")) polite = atof(argv[++i]);   /* neural agent: when the RTT ratio is >= X (queue building) never grow, back off x0.85 (Vegas-like courtesy) */
         else if (ARG("--ssdeep")) ssdeep = atof(argv[++i]);
         else if (ARG("--ssratio")) ss_ratio = atof(argv[++i]);
         else if (ARG("--seed")) seed = (unsigned)atoi(argv[++i]);
@@ -378,6 +379,7 @@ int main(int argc, char **argv) {
                     else if (use_deep) {
                         double x[DN_IN] = { (ratio - 1.0 > 3.0 ? 3.0 : ratio - 1.0) / 3.0, (lossf > 0.3 ? 0.3 : lossf) / 0.3, cwnd / 32.0, thr, RL_MULT[last_act] - 1.0 }, q[DN_OUT];
                         deep_forward(&dnet, x, q); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (q[k] > q[act]) act = k;
+                        if (polite > 0 && ratio >= polite && (avg_rtt - base_r) > 2.0 * rttvar && cwnd > 12 && act > 1) act = 1;
                     } else {
                         int s2 = rl_state(ratio, lossf, cwnd); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (ag.q[s2][k] > ag.q[s2][act]) act = k;
                     }

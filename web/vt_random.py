@@ -26,6 +26,8 @@ if __name__ == "__main__":
     seed0 = int(sys.argv[2]) if len(sys.argv) > 2 else 424242
     rng = random.Random(seed0); paths = [draw(rng) for _ in range(n)]
     arms = ["aimd_128", "cubic_128", "deep"]
+    if os.environ.get("POLITE"):
+        vt.ARMS["deep_polite"] = vt.ARMS["deep"] + " --polite " + os.environ["POLITE"]; arms.append("deep_polite")
     if len(sys.argv) > 3:
         vt.ARMS["deep2"] = "--mode deep --init 10 --dfile " + sys.argv[3]; arms.append("deep2")
     from concurrent.futures import ThreadPoolExecutor
