@@ -1,0 +1,24 @@
+5g     aimd128  n=10 time   1.31 s +/- 0.19   sent   1257
+5g     aimd32   n=10 time   1.48 s +/- 0.17   sent   1270
+5g     deep     n=10 time   1.20 s +/- 0.04   sent   1280
+5g     deeprg   n=10 time   2.88 s +/- 0.03   sent   1227
+       paired deep - aimd32: -0.28 s +/- 0.18 (significant)
+       paired deeprg - aimd32: +1.40 s +/- 0.16 (significant)
+       paired deep - aimd128: -0.10 s +/- 0.19 (not significant)
+       paired deeprg - aimd128: +1.58 s +/- 0.18 (significant)
+lossy  aimd128  n=10 time   8.89 s +/- 0.58   sent   1454
+lossy  aimd32   n=10 time   9.12 s +/- 1.18   sent   1459
+lossy  deep     n=10 time   6.51 s +/- 0.93   sent   1866
+lossy  deeprg   n=10 time   9.53 s +/- 0.49   sent   1410
+       paired deep - aimd32: -2.61 s +/- 1.28 (significant)
+       paired deeprg - aimd32: +0.41 s +/- 1.17 (not significant)
+       paired deep - aimd128: -2.39 s +/- 0.93 (significant)
+       paired deeprg - aimd128: +0.63 s +/- 0.76 (not significant)
+sat    aimd128  n=10 time  18.66 s +/- 2.73   sent   1286
+sat    aimd32   n=10 time  18.85 s +/- 1.92   sent   1281
+sat    deep     n=10 time  13.48 s +/- 0.40   sent   1314
+sat    deeprg   n=10 time  30.02 s +/- 6.42   sent   1258
+       paired deep - aimd32: -5.37 s +/- 1.90 (significant)
+       paired deeprg - aimd32: +11.17 s +/- 7.61 (significant)
+       paired deep - aimd128: -5.18 s +/- 2.62 (significant)
+       paired deeprg - aimd128: +11.36 s +/- 7.09 (significant)

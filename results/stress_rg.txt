@@ -1,0 +1,21 @@
+Stress test, 48 paths x 3 seeds, realistic fast-retransmit (RUDP_RG=1)
+--- original neural agent (trained in the permissive simulator)
+48 random paths x 3 seeds
+  mean time fixed :    7.16 s   median   3.03 s
+  mean time aimd  :    7.75 s   median   3.22 s
+  mean time smart :    7.10 s   median   3.13 s
+  mean time deep  :    7.27 s   median   3.13 s
+  Smart vs AIMD : faster on 15, slower on 13, within 5% on 20
+  Smart vs fixed: faster on 21, slower on 12, within 5% on 15
+  Deep  vs aimd : faster on 12, slower on 15, within 5% on 21
+  Deep  vs fixed: faster on 18, slower on 19, within 5% on 11
+--- neural agent retrained in the realistic simulator (results/dqn_chat_rg.json)
+48 random paths x 3 seeds
+  mean time fixed :    7.16 s   median   3.03 s
+  mean time aimd  :    7.75 s   median   3.22 s
+  mean time smart :    7.10 s   median   3.13 s
+  mean time deep  :    7.03 s   median   3.25 s
+  Smart vs AIMD : faster on 15, slower on 13, within 5% on 20
+  Smart vs fixed: faster on 21, slower on 12, within 5% on 15
+  Deep  vs aimd : faster on 13, slower on 13, within 5% on 22
+  Deep  vs fixed: faster on 22, slower on 14, within 5% on 12

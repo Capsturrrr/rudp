@@ -3,13 +3,15 @@ Discrete-event simulator of the chat transport (Go-Back-N, cumulative ACKs, 3-du
 300 ms timeout) over a path with one-way delay, random loss, and an optional bottleneck queue.
 Used to train and evaluate the window controllers on many paths quickly.
 """
-import heapq, random
+import heapq, os, random
+RG_DEFAULT = os.environ.get("RUDP_RG") == "1"   # RUDP_RG=1: realistic fast-retransmit (no re-trigger within one recovery), as in the C smart client
 from cc import Controller
 
 TIMEOUT = 0.3
 TICK = 0.01
 
-def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, jitter=0.0, sack=False):
+def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, jitter=0.0, sack=False, recover_guard=False):
+    recover_guard = recover_guard or RG_DEFAULT
     rng = random.Random(seed)
     ev, cnt = [], 0
     def push(t, kind, data=None):
@@ -21,6 +23,7 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
     expected = 0
     rcvd, sacked = set(), set()
     dups = 0
+    recover = -1         # with recover_guard: no new fast retransmit until data outstanding at the last one is acked
     link_free = 0.0      # bottleneck serialization for data direction
     ctrl.reset()
     pending = n_msgs
@@ -79,11 +82,11 @@ def run(ctrl, loss, delay, n_msgs=60, rate=None, queue=20, seed=0, max_t=30.0, j
                 if base >= n_msgs: return t
             elif data == base and base < nxt:
                 dups += 1
-                if dups == 3:
-                    ctrl.on_loss("dup"); resend(True); dups = 0
+                if dups >= 3 and (not recover_guard or base > recover):
+                    ctrl.on_loss("dup"); resend(True); dups = 0; recover = nxt - 1
         elif kind == "tick":
             if base < nxt and t - sent_at[base] > TIMEOUT:
-                ctrl.on_loss("timeout"); resend()
+                ctrl.on_loss("timeout"); resend(); recover = nxt - 1
             ctrl.step(t, pending)
             pump()
             push(t + TICK, "tick")

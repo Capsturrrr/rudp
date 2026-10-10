@@ -8,7 +8,7 @@ from dqn import DQN
 from sim import run
 from train import TRAIN_LOSS, TRAIN_DELAY, TRAIN_RATE, TEST_PATHS
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "..", "results", "dqn_chat.json")
+OUT = os.environ.get("RUDP_OUT") or os.path.join(HERE, "..", "results", "dqn_chat.json")
 
 def train(episodes=6000, seed=7, log=True):
     rng = random.Random(seed); net = DQN(seed=seed)

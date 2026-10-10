@@ -39,6 +39,7 @@ def save_q(q, path):
 LAG = 1
 MASK = True
 DELAY_W = 0.5          # weight of the RTT-inflation penalty in the reward
+RANDOM_LOSS_RATIO = 0.0   # >0: loss with RTT inflation below this ratio is treated as non-congestive (no shrink)
 FEAT_ZERO = ()         # feature indices blanked out (ablation studies only)
 
 def deep_feat(ratio, loss, cwnd, thr, last_a):
@@ -118,6 +119,8 @@ class Controller:
         allowed = range(5)
         if MASK and loss == 0 and ratio < 1.5:
             allowed = (2, 3, 4)          # no congestion signal: never shrink the window
+        elif MASK and RANDOM_LOSS_RATIO > 0 and ratio < RANDOM_LOSS_RATIO:
+            allowed = (2, 3, 4)          # loss without queueing delay: looks random, not congestion
         r = thr - DELAY_W * max(0.0, ratio - 1.0) - 4.0 * loss
         if deep:
             f = deep_feat(ratio, loss, self.cwnd, thr, self.prev_a)
