@@ -7,6 +7,7 @@ import math, os, random
 
 RL_MULT = [0.5, 0.85, 1.0, 1.15, 1.5]
 CWND_MAX = 32.0   # feature normalisation (matches the C agent)
+SS_DEEP = 0.0    # >0: the neural agent starts with classic slow start up to this window (the gateway sets 64, like smart_client)
 CAP = 32.0        # window ceiling; the gateway raises it to 128 like smart_client
 INIT_CWND = 10.0          # RFC 6928 initial window; used by BOTH aimd and smart for a fair comparison
 FIXED_WINDOW = 8
@@ -65,6 +66,8 @@ class Controller:
         if mode: self.mode = mode
         self.cwnd = float(FIXED_WINDOW) if self.mode == "fixed" else INIT_CWND
         self.ssthresh = CAP if CAP > 32 else 16.0
+        self.ss = self.mode == "deep" and SS_DEEP > 0
+        if self.ss: self.ssthresh = SS_DEEP
         self.srtt = self.min_rtt = None
         self.iv_start = None
         self.iv_new = self.iv_lossev = self.iv_acked = 0
@@ -93,12 +96,14 @@ class Controller:
             self.iv_rtts.append(r)
             self.srtt = r if self.srtt is None else 0.875 * self.srtt + 0.125 * r
             self.min_rtt = r if self.min_rtt is None else min(self.min_rtt, r)
-        if self.mode == "aimd" or self.guard > 0:
+        if self.mode == "aimd" or self.guard > 0 or self.ss:
             for _ in range(n_acked):
                 self.cwnd = min(CAP, self.cwnd + (1.0 if self.cwnd < self.ssthresh else 1.0 / self.cwnd))
+            if self.ss and self.cwnd >= SS_DEEP: self.ss = False
 
     def on_loss(self, kind):
         self.iv_lossev += 1
+        self.ss = False
         if self.guard > 0:
             self.ssthresh = max(2.0, self.cwnd / 2)
             self.cwnd = 1.0 if kind == "timeout" else self.ssthresh
@@ -126,6 +131,9 @@ class Controller:
         loss = min(1.0, lossev / max(1, new))
         peak = max(1.0, CWND_MAX * dur / max(base, 0.02))
         thr = min(1.0, acked / peak)
+        if self.ss and deep:                       # slow start: the policy is not consulted until the first congestion signal
+            if loss > 0 or ratio >= 1.3: self.ss = False
+            else: self.last_action = "slow start"; self.note = f"deep: slow start, cwnd {self.cwnd:.1f}"; return
         if deep and HYBRID > 0:
             if loss >= HYBRID: self.guard = 3
             elif self.guard > 0: self.guard -= 1

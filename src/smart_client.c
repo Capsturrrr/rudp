@@ -120,7 +120,7 @@ static void vsrv_rx(ring_t *rev, double now, const uint8_t *b, int n) {
 
 int main(int argc, char **argv) {
     const char *mode = "aimd", *scenario = "custom", *qfile = NULL, *trace = NULL, *pcapp = NULL;
-    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; double vstep = 0.35; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
+    int port = SERVER_PORT, npk = 1500, train = 0; unsigned seed = 1; double pace = 0, pace_next = 0, vstep = 0.35, ssdeep = -1, ss_ratio = 1.3; const char *fpath = NULL; long fbytes = 0; uint64_t ffnv = 1469598103934665603ULL;
     int use_sack = 1; double hyb = -1.0, ss0 = 16.0; int guard = 0, cap_set = 0; double tcut = 0.0, eps = 0.0, maxcwnd = 128, ref = 0, init_cwnd = -1; const char *dfile = NULL;
     for (int i = 1; i < argc; i++) {
 #define ARG(n) (!strcmp(argv[i], n) && i + 1 < argc)
@@ -135,6 +135,9 @@ int main(int argc, char **argv) {
         else if (ARG("--file")) fpath = argv[++i];
         else if (ARG("--vt")) vt = atoi(argv[++i]);
         else if (ARG("--vstep")) vstep = atof(argv[++i]);
+        else if (ARG("--pace")) pace = atof(argv[++i]);
+        else if (ARG("--ssdeep")) ssdeep = atof(argv[++i]);
+        else if (ARG("--ssratio")) ss_ratio = atof(argv[++i]);
         else if (ARG("--seed")) seed = (unsigned)atoi(argv[++i]);
         else if (ARG("--qfile")) qfile = argv[++i];
         else if (ARG("--train")) train = atoi(argv[++i]);
@@ -160,6 +163,8 @@ int main(int argc, char **argv) {
     int use_deep = !strcmp(mode, "deep"), use_rl2 = !strcmp(mode, "rl2"), chat = use_deep || use_rl2;
     if (use_rl2 && !cap_set && maxcwnd > 32) maxcwnd = 32;   /* the table agent expects a cap of 32 */
     int classic = getenv("RUDP_CLASSIC") != NULL;               /* RUDP_CLASSIC=1: the original agent settings (cap 32, no hand-over) used by the older evaluation scripts */
+    if (use_deep && pace == 0 && !classic) pace = 2.0;   /* neural agent paces new packets at 2 x cwnd/srtt: 3% faster, 23% fewer retransmissions (vt sweep) */
+    if (use_deep && ssdeep < 0) ssdeep = classic ? 0 : 64;   /* slow start up to 64 packets before the policy takes over (see web/vt_random.py sweep) */
     if (use_deep && !cap_set) maxcwnd = classic ? 32 : 128;                /* performance default for the neural agent (it was trained with a cap of 32 but generalises; see eval_perf2.sh) */
     if (use_deep && hyb < 0) hyb = classic ? 0.0 : 0.10;                     /* performance default: hand over to AIMD under heavy loss; --hybrid 0 turns it off */
     if (use_sack && maxcwnd > 250) maxcwnd = 250;   /* the receiver buffers a 256-packet window */
@@ -235,6 +240,7 @@ int main(int argc, char **argv) {
 
     /* ---- sender state ---- */
     int base = 0, next = 0, dup = 0, recover = -1; uint32_t last_ack = 0;
+    int ss_phase = 0;   /* deep agent: classic slow start until the first congestion signal, then the policy takes over */
     double rto_mult = getenv("RUDP_RTOMULT") ? atof(getenv("RUDP_RTOMULT")) : 1.3; double wmax = 0, kcub = 0, epoch = -1; double cwnd = init_cwnd, ssthresh = ss0, srtt = -1, rttvar = 0, rto = 1000;
     double min_rtt = 1e9, rtt_sum = 0, dev_floor = 1e9; long rtt_n = 0;
     long tx_total = 0, retx = 0, timeouts = 0, fast_retx = 0;
@@ -244,6 +250,7 @@ int main(int argc, char **argv) {
     int prev_s = -1, prev_a = -1; double rew_sum = 0; long rew_n = 0;
     long iv_new = 0, iv_lossev = 0; int last_act = 2;
 
+    if (use_deep && ssdeep > 0) { ss_phase = 1; ssthresh = ssdeep; }
     double t0 = now_ms(); iv_start = t0; timer_start = t0;
     if (tr) fprintf(tr, "0,START,%.2f,0\n", cwnd);
 
@@ -295,7 +302,7 @@ int main(int argc, char **argv) {
                     rto = srtt + 4 * rttvar; if (rto < srtt * rto_mult) rto = srtt * rto_mult; if (rto < 60) rto = 60; if (rto > 3000) rto = 3000;
                 }
                 iv_acked += newly; base = nb; dup = 0; last_ack = a;
-                if ((!use_rl && !chat) || guard > 0) {
+                if ((!use_rl && !chat) || guard > 0 || ss_phase) {
                     for (int k = 0; k < newly; k++) {
                         if (cwnd < ssthresh) cwnd += 1.0;
                         else if (use_cubic) {
@@ -305,13 +312,14 @@ int main(int argc, char **argv) {
                         } else cwnd += 1.0 / cwnd;
                     }
                     if (cwnd > maxcwnd) cwnd = maxcwnd;
+                    if (ss_phase && cwnd >= ssdeep) ss_phase = 0;
                 }
                 timer_on = base < npk; timer_start = now;
                 if (tr) fprintf(tr, "%.1f,ACK,%.2f,%.1f\n", now - t0, cwnd, srtt);
             } else if (a == last_ack && a == pk[base].seq_num) {
                 dup++;
                 if (dup >= DUP_ACK_THRESHOLD && base > recover) {
-                    recover = next - 1; fast_retx++; iv_lossev++;
+                    recover = next - 1; fast_retx++; iv_lossev++; ss_phase = 0;
                     if ((!use_rl && !chat) || guard > 0) {
                         if (use_cubic) { wmax = cwnd; ssthresh = cwnd * 0.7; if (ssthresh < 2) ssthresh = 2; cwnd = ssthresh; kcub = cbrt(wmax * 0.3 / 0.4); epoch = now; }
                         else { ssthresh = cwnd / 2; if (ssthresh < 1) ssthresh = 1; cwnd = ssthresh; }
@@ -333,7 +341,7 @@ int main(int argc, char **argv) {
             double rto_old = rto;
             /* penalise once per loss event; in Selective Repeat several packets can expire inside one event */
             if (!use_sack || first_exp > recover) {
-                timeouts++; iv_lossev++;
+                timeouts++; iv_lossev++; ss_phase = 0;
                 if (use_cubic) { wmax = cwnd; ssthresh = cwnd * 0.7; kcub = cbrt(wmax * 0.3 / 0.4); epoch = now; } else ssthresh = cwnd / 2;
                 if (ssthresh < 2) ssthresh = 2;
                 if (chat && guard > 0) { cwnd = 1.0; /* hybrid: AIMD is in control */ } else if (chat) { /* the chat-style agents leave the window to the policy; --tcut X adds an AIMD-style safety net: window x X on a timeout */ if (tcut > 0) { cwnd *= tcut; if (cwnd < 2) cwnd = 2; } } else if (use_rl) { cwnd = cwnd / 2 < 2 ? 2 : cwnd / 2; } else { cwnd = 1.0; }
@@ -366,13 +374,14 @@ int main(int argc, char **argv) {
                     int lo = (lossf == 0 && ratio < 1.5) ? 2 : 0;           /* no congestion signal: never shrink */
                     int act = 2;
                     if (guard > 0) { if (tr) fprintf(tr, "%.1f,GUARD,%.2f,%.1f\n", now - t0, cwnd, srtt); }
+                    else if (ss_phase) { if (ratio >= ss_ratio || lossf > 0) ss_phase = 0; }
                     else if (use_deep) {
                         double x[DN_IN] = { (ratio - 1.0 > 3.0 ? 3.0 : ratio - 1.0) / 3.0, (lossf > 0.3 ? 0.3 : lossf) / 0.3, cwnd / 32.0, thr, RL_MULT[last_act] - 1.0 }, q[DN_OUT];
                         deep_forward(&dnet, x, q); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (q[k] > q[act]) act = k;
                     } else {
                         int s2 = rl_state(ratio, lossf, cwnd); act = lo; for (int k = lo + 1; k < RL_NA; k++) if (ag.q[s2][k] > ag.q[s2][act]) act = k;
                     }
-                    if (guard == 0) { cwnd *= RL_MULT[act]; if (cwnd < 2) cwnd = 2; if (cwnd > maxcwnd) cwnd = maxcwnd; last_act = act; }
+                    if (guard == 0 && !ss_phase) { cwnd *= RL_MULT[act]; if (cwnd < 2) cwnd = 2; if (cwnd > maxcwnd) cwnd = maxcwnd; last_act = act; }
                     if (tr) fprintf(tr, "%.1f,RL_%d,%.2f,%.1f\n", now - t0, act, cwnd, srtt);
                 }
             }
@@ -408,6 +417,11 @@ int main(int argc, char **argv) {
         }
         /* 6. send within window */
         while (next < npk && next < base + (int)cwnd) {
+            if (pace > 0 && srtt > 0) {                  /* --pace G: spread new packets over the round trip at G x cwnd/srtt (like fq pacing) */
+                if (pace_next < now - 2.0) pace_next = now - 2.0;   /* at most ~2 ms of accumulated credit */
+                if (pace_next > now) break;
+                pace_next += srtt / (cwnd * pace);
+            }
             TX(next, 0); if (!timer_on) { timer_on = 1; timer_start = now_ms(); } next++;
         }
         /* 7. wait a little for the next event */

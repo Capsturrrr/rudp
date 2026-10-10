@@ -1,10 +1,10 @@
-"""Helpers for the virtual-time C sender (bin/smart_vt = smart_client built with --vt support).
+"""Helpers for the virtual-time C sender (bin/smart_client run with --vt 1).
 The sender code is the same C code that runs on real sockets; only the clock and the receiver are simulated."""
 import os, subprocess, math, statistics as st
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-BIN = os.path.join(ROOT, "bin", "smart_vt")
+BIN = os.environ.get("VT_BIN") or os.path.join(ROOT, "bin", "smart_client")
 DFILE = os.path.join(ROOT, "results", "dqn_chat.txt")
 T95 = {1: 12.71, 2: 4.30, 3: 3.18, 4: 2.78, 5: 2.57, 6: 2.45, 7: 2.36, 8: 2.31, 9: 2.26, 10: 2.23, 15: 2.13, 20: 2.09, 30: 2.05, 40: 2.02, 60: 2.0}
 
@@ -22,12 +22,12 @@ ARMS = {
     "deep":     "--mode deep --init 10 --dfile " + DFILE,
 }
 
-def run(arm, path, seed, npk=None, dfile=None, extra=""):
+def run(arm, path, seed, npk=None, dfile=None, extra="", env=None):
     pargs, n = PATHS[path] if path in PATHS else (path, npk or 1200)
     a = ARMS.get(arm, arm)
     if dfile: a = a.replace(DFILE, dfile)
     cmd = [BIN, "--vt", "1", *a.split(), *pargs.split(), *extra.split(), "--packets", str(npk or n), "--seed", str(seed)]
-    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    out = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ, **env) if env else None).stdout
     for line in out.splitlines():
         if line.startswith("RESULT"):
             f = line.split(",")

@@ -1,0 +1,10 @@
+variant                                        ratio to AIMD  vs final  >20% slower  retx/pkt
+tuned AIMD (reference)                                 1.000     1.960         0/100     0.020
+tuned AIMD, retransmission-timer floor off             1.412     2.767        49/100     0.035
+neural agent, final configuration                      0.510     1.000         1/100     0.028
+  without slow start before the policy                 0.527     1.033         4/100     0.028
+  without pacing                                       0.549     1.076         4/100     0.046
+  without the AIMD hand-over                           0.506     0.992         1/100     0.028
+  window cap 32 instead of 128                         0.837     1.640        21/100     0.016
+  without the timer floor                              0.519     1.017         2/100     0.053
+  original settings (RUDP_CLASSIC=1)                   0.859     1.684        25/100     0.020

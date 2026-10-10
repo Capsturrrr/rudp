@@ -1,0 +1,122 @@
+start: validation fitness -0.4133 (0 = tuned AIMD, negative = faster)
+gen   1  batch fitness -0.2857  (pop mean -0.2594)      2s
+gen   2  batch fitness -0.4352  (pop mean -0.3988)      3s
+gen   3  batch fitness -0.1677  (pop mean -0.1811)      5s
+gen   4  batch fitness -0.5634  (pop mean -0.6090)      7s
+gen   5  batch fitness -0.3594  (pop mean -0.2633)      8s  validation -0.3522
+gen   6  batch fitness -0.3412  (pop mean -0.2390)     10s
+gen   7  batch fitness -0.4466  (pop mean -0.4215)     12s
+gen   8  batch fitness -0.2876  (pop mean -0.2924)     13s
+gen   9  batch fitness -0.3204  (pop mean -0.3564)     15s
+gen  10  batch fitness -0.0093  (pop mean -0.0976)     17s  validation -0.4259  *
+gen  11  batch fitness -0.4297  (pop mean -0.3635)     19s
+gen  12  batch fitness -0.2580  (pop mean -0.3232)     21s
+gen  13  batch fitness -0.3813  (pop mean -0.3737)     22s
+gen  14  batch fitness -0.4185  (pop mean -0.3402)     24s
+gen  15  batch fitness -0.4815  (pop mean -0.4747)     25s  validation -0.4296  *
+gen  16  batch fitness -0.2838  (pop mean -0.2596)     27s
+gen  17  batch fitness -0.2178  (pop mean -0.2816)     29s
+gen  18  batch fitness -0.2433  (pop mean -0.2335)     31s
+gen  19  batch fitness -0.1304  (pop mean -0.1306)     32s
+gen  20  batch fitness -0.3827  (pop mean -0.3307)     34s  validation -0.3800
+gen  21  batch fitness -0.5278  (pop mean -0.5694)     36s
+gen  22  batch fitness -0.5158  (pop mean -0.4749)     38s
+gen  23  batch fitness -0.4774  (pop mean -0.4728)     40s
+gen  24  batch fitness -0.3740  (pop mean -0.3554)     42s
+gen  25  batch fitness -0.3856  (pop mean -0.3808)     44s  validation -0.4056
+gen  26  batch fitness -0.1952  (pop mean -0.1403)     46s
+gen  27  batch fitness -0.2204  (pop mean -0.2346)     47s
+gen  28  batch fitness -0.2189  (pop mean -0.2401)     49s
+gen  29  batch fitness -0.3690  (pop mean -0.3217)     51s
+gen  30  batch fitness -0.2978  (pop mean -0.3301)     53s  validation -0.4186
+gen  31  batch fitness -0.4269  (pop mean -0.4437)     55s
+gen  32  batch fitness -0.4741  (pop mean -0.4527)     56s
+gen  33  batch fitness -0.4015  (pop mean -0.3579)     58s
+gen  34  batch fitness -0.2325  (pop mean -0.2411)     60s
+gen  35  batch fitness -0.3170  (pop mean -0.2965)     61s  validation -0.4061
+gen  36  batch fitness -0.4005  (pop mean -0.3971)     63s
+gen  37  batch fitness -0.3614  (pop mean -0.3387)     65s
+gen  38  batch fitness -0.5300  (pop mean -0.5346)     67s
+gen  39  batch fitness -0.1226  (pop mean -0.1230)     69s
+gen  40  batch fitness -0.3417  (pop mean -0.3446)     71s  validation -0.3949
+gen  41  batch fitness -0.2230  (pop mean -0.1953)     72s
+gen  42  batch fitness -0.5244  (pop mean -0.4995)     74s
+gen  43  batch fitness -0.3652  (pop mean -0.3468)     76s
+gen  44  batch fitness -0.3149  (pop mean -0.3067)     77s
+gen  45  batch fitness -0.3325  (pop mean -0.3188)     78s  validation -0.4002
+gen  46  batch fitness -0.3854  (pop mean -0.3781)     80s
+gen  47  batch fitness -0.2327  (pop mean -0.2208)     82s
+gen  48  batch fitness -0.2547  (pop mean -0.2745)     83s
+gen  49  batch fitness -0.3181  (pop mean -0.3362)     85s
+gen  50  batch fitness -0.3008  (pop mean -0.2671)     87s  validation -0.3909
+gen  51  batch fitness -0.3072  (pop mean -0.2884)     88s
+gen  52  batch fitness -0.1764  (pop mean -0.1763)     90s
+gen  53  batch fitness -0.1976  (pop mean -0.1932)     91s
+gen  54  batch fitness -0.5513  (pop mean -0.5672)     93s
+gen  55  batch fitness -0.5647  (pop mean -0.5887)     94s  validation -0.3850
+gen  56  batch fitness -0.1617  (pop mean -0.2077)     96s
+gen  57  batch fitness -0.4798  (pop mean -0.5268)     97s
+gen  58  batch fitness -0.3342  (pop mean -0.3295)     99s
+gen  59  batch fitness -0.1720  (pop mean -0.1941)    100s
+gen  60  batch fitness -0.4328  (pop mean -0.3893)    102s  validation -0.3926
+gen  61  batch fitness -0.2380  (pop mean -0.2320)    104s
+gen  62  batch fitness -0.3089  (pop mean -0.2868)    105s
+gen  63  batch fitness -0.3389  (pop mean -0.3280)    107s
+gen  64  batch fitness -0.4998  (pop mean -0.5189)    109s
+gen  65  batch fitness -0.4092  (pop mean -0.3968)    111s  validation -0.4106
+gen  66  batch fitness -0.3821  (pop mean -0.3747)    113s
+gen  67  batch fitness -0.5766  (pop mean -0.5751)    115s
+gen  68  batch fitness -0.6887  (pop mean -0.6813)    116s
+gen  69  batch fitness -0.4557  (pop mean -0.4808)    118s
+gen  70  batch fitness -0.3480  (pop mean -0.3267)    120s  validation -0.4294
+gen  71  batch fitness -0.2779  (pop mean -0.2854)    122s
+gen  72  batch fitness -0.3125  (pop mean -0.3172)    123s
+gen  73  batch fitness -0.4346  (pop mean -0.4422)    125s
+gen  74  batch fitness -0.4150  (pop mean -0.4251)    126s
+gen  75  batch fitness -0.2638  (pop mean -0.2516)    128s  validation -0.4323  *
+gen  76  batch fitness -0.5554  (pop mean -0.5376)    130s
+gen  77  batch fitness -0.4353  (pop mean -0.4554)    131s
+gen  78  batch fitness -0.2225  (pop mean -0.2323)    133s
+gen  79  batch fitness -0.3189  (pop mean -0.3357)    135s
+gen  80  batch fitness -0.1085  (pop mean -0.1081)    136s  validation -0.4236
+gen  81  batch fitness -0.2804  (pop mean -0.2775)    138s
+gen  82  batch fitness -0.5312  (pop mean -0.5159)    140s
+gen  83  batch fitness -0.2236  (pop mean -0.2104)    141s
+gen  84  batch fitness -0.2419  (pop mean -0.2461)    143s
+gen  85  batch fitness -0.1841  (pop mean -0.1719)    145s  validation -0.4248
+gen  86  batch fitness -0.1516  (pop mean -0.1447)    146s
+gen  87  batch fitness -0.3332  (pop mean -0.3183)    148s
+gen  88  batch fitness -0.4488  (pop mean -0.4497)    150s
+gen  89  batch fitness -0.4018  (pop mean -0.3780)    151s
+gen  90  batch fitness -0.4571  (pop mean -0.4536)    153s  validation -0.4170
+gen  91  batch fitness -0.5849  (pop mean -0.5736)    155s
+gen  92  batch fitness -0.2055  (pop mean -0.1873)    156s
+gen  93  batch fitness -0.6518  (pop mean -0.6488)    158s
+gen  94  batch fitness -0.2106  (pop mean -0.1876)    160s
+gen  95  batch fitness -0.3817  (pop mean -0.3756)    161s  validation -0.4173
+gen  96  batch fitness -0.1609  (pop mean -0.1196)    163s
+gen  97  batch fitness -0.2611  (pop mean -0.2381)    165s
+gen  98  batch fitness -0.4872  (pop mean -0.4620)    167s
+gen  99  batch fitness -0.1651  (pop mean -0.1734)    168s
+gen 100  batch fitness -0.4325  (pop mean -0.4149)    170s  validation -0.4041
+gen 101  batch fitness -0.4095  (pop mean -0.4342)    172s
+gen 102  batch fitness -0.4807  (pop mean -0.4871)    173s
+gen 103  batch fitness -0.3016  (pop mean -0.3289)    175s
+gen 104  batch fitness -0.5427  (pop mean -0.5353)    177s
+gen 105  batch fitness -0.1790  (pop mean -0.1921)    179s  validation -0.4154
+gen 106  batch fitness -0.4625  (pop mean -0.4166)    180s
+gen 107  batch fitness -0.3865  (pop mean -0.3829)    182s
+gen 108  batch fitness -0.1927  (pop mean -0.1566)    183s
+gen 109  batch fitness -0.3675  (pop mean -0.3395)    185s
+gen 110  batch fitness -0.1614  (pop mean -0.1662)    187s  validation -0.4080
+gen 111  batch fitness -0.3863  (pop mean -0.3710)    189s
+gen 112  batch fitness -0.4822  (pop mean -0.4675)    191s
+gen 113  batch fitness -0.6954  (pop mean -0.7100)    192s
+gen 114  batch fitness -0.1997  (pop mean -0.1892)    194s
+gen 115  batch fitness -0.0846  (pop mean -0.0967)    196s  validation -0.4209
+gen 116  batch fitness -0.3729  (pop mean -0.3685)    198s
+gen 117  batch fitness -0.4076  (pop mean -0.4009)    200s
+gen 118  batch fitness -0.1787  (pop mean -0.1681)    201s
+gen 119  batch fitness -0.3018  (pop mean -0.2896)    203s
+gen 120  batch fitness -0.4022  (pop mean -0.4141)    205s  validation -0.4295
+best validation fitness -0.4323; saved results/dqn_es.txt

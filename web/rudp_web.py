@@ -297,9 +297,10 @@ if __name__ == "__main__":
     ap.add_argument("--tcut", type=float, default=0.0, help="agent safety net: multiply the window by this on a retransmission timeout (0 = off, 0.25 recommended)")
     ap.add_argument("--gbn", action="store_true", help="use the original Go-Back-N behaviour instead of Selective Repeat")
     ap.add_argument("--cap", type=float, default=128.0, help="window ceiling (packets); 128 matches smart_client, 32 restores the original")
+    ap.add_argument("--ssdeep", type=float, default=64.0, help="neural agent: classic slow start up to this window before the policy takes over (0 = off)")
     ap.add_argument("--hybrid", type=float, default=0.10, help="neural agent hands control to AIMD while the loss fraction per interval is >= this (0 = off, 0.10 recommended)")
     a = ap.parse_args()
-    import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid; _cc.CAP = min(a.cap, 250.0)
+    import cc as _cc; _cc.TIMEOUT_CUT = a.tcut; _cc.HYBRID = a.hybrid; _cc.CAP = min(a.cap, 250.0); _cc.SS_DEEP = a.ssdeep
     import os
     html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"), encoding="utf-8").read()
     chat = Chat(a.udp, a.peer, a.name, a.loss, a.delay)
