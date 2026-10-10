@@ -46,8 +46,13 @@ Neural agent in the C transport
 
 Live dashboard and adaptive timeout (web chat)
    The right-hand panel plots window, packets in flight, RTT and loss for the last 60 seconds.
-   Add  --rto adaptive  to either gateway for an RFC 6298 retransmission timer with backoff
-   (default is the fixed 300 ms timeout). Use it on high-delay links (RTT over 300 ms).
+   The gateway now uses an RFC 6298 retransmission timer with backoff by default (--rto adaptive);
+   --rto fixed restores the old fixed 300 ms timeout.
 
 Selective Repeat is the default in the web chat and in ./bin/chat. Add --gbn (gateway) or set RUDP_GBN=1 (./bin/chat)
 to get the old Go-Back-N behaviour. Both ends should use the same mode.
+
+Window and agent settings (gateway): the receive window and ACK bitmap are 256 packets / 32 bytes, the same as the C transport and ./bin/chat, so
+the gateway and the terminal chat interoperate (tests/chat_interop.sh). --cap 128 (default) is the window ceiling, --ssdeep 64 (default) is the
+classic slow-start phase before the neural agent takes over, --hybrid 0.10 (default) hands control to AIMD under heavy loss. Use --cap 32 --ssdeep 0
+--hybrid 0 for the original behaviour. The checksum is CRC-16, so old binaries cannot talk to new ones.

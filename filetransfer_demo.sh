@@ -16,7 +16,7 @@ printf "%-26s %9s %10s %8s   %s\n" policy "time" "goodput" "retx" integrity
 for arm in aimd_32 aimd_128 deep; do
   case $arm in aimd_32) A="--mode aimd --init 10 --maxcwnd 32";; aimd_128) A="--mode aimd --init 10 --maxcwnd 128 --ssthresh 128";; deep) A="--mode deep --init 10 --dfile results/dqn_chat.txt";; esac
   RUDP_OUT=$OUT RUDP_QUIET=1 ./bin/server_ft > /tmp/ft_srv.log 2>&1 & SP=$!
-  ./bin/impair $PX_PORT $SP_PORT ${P[$PROF]} 2>/dev/null & PX=$!; sleep 0.3
+  ./bin/impair $PX_PORT $SP_PORT ${P[$PROF]} >/dev/null 2>&1 & PX=$!; sleep 0.3
   R=$(timeout 600 ./bin/smart_client $A --emu 0 --port $PX_PORT --file $IN)
   sleep 0.4; kill $PX $SP 2>/dev/null; wait $PX $SP 2>/dev/null
   S=$(echo "$R" | grep ^FILE | sed 's/.*fnv1a=\([0-9a-f]*\).*/\1/'); D=$(grep TRANSFER /tmp/ft_srv.log | sed 's/.*fnv1a=//')

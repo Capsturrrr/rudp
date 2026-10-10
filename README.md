@@ -1,102 +1,97 @@
-# RUDP — Reliable Transport Protocol over UDP
+# RUDP: reliable UDP in C, with a learned congestion controller
 
-A custom reliable transport-layer protocol implemented over raw UDP sockets in C,
-replicating core TCP mechanisms: three-way handshake, sequencing, retransmission,
-sliding window flow control, and AIMD-based congestion control.
+[![ci](https://github.com/Capsturrrr/rudp/actions/workflows/ci.yml/badge.svg)](https://github.com/Capsturrrr/rudp/actions/workflows/ci.yml)
 
-**Team:** Harshavardhan Mallela (24BAI0274), Rohit Arya (24BCE0819), Shloak Sinha (24BDS0378)
-**Course:** Computer Networks — lab project (Cisco/Wireshark experiment + implementation)
+A reliable, congestion-controlled transport over UDP, written in C: handshake, Selective Repeat with a 256-packet window,
+CRC-16, adaptive retransmission timer, pluggable congestion control (AIMD, CUBIC, tabular Q-learning, a small neural network),
+file transfer, a chat application (terminal and web), a four-router OSPF network design, a Wireshark dissector, and the evaluation
+tooling to test all of it honestly.
 
-## Project Status: Phases 0–7 complete
+**Team:** Harshavardhan Mallela (24BAI0274), Rohit Arya (24BCE0819), Shloak Sinha (24BDS0378). Computer Networks, VIT Vellore, faculty Anuradha G.
 
-- [x] Phase 0 — Environment, toolchain, repo setup
-- [x] Phase 1 — Raw UDP echo (client/server communicating)
-- [x] Phase 2 — Custom packet format, pack/unpack, checksum
-- [x] Phase 3 — Three-way handshake, connection state machine
-- [x] Phase 4 — Reliable delivery: sliding window, Go-Back-N, retransmission timeout, fast retransmit
-- [x] Phase 5 — AIMD congestion control: slow start, congestion avoidance, timeout/fast-retransmit response
-- [x] Phase 6 — Real network emulation (tc/netem) + Wireshark packet capture
-- [x] Phase 7 — Benchmarking + visualization (cwnd graphs, loss-vs-duration graphs)
+## Headline results
 
-Extensions (done):
+Completion time of a transfer, neural agent against **tuned** baselines (AIMD with window cap 128, CUBIC with cap 128), same transport,
+same timers, paired seeds, 95% intervals. Details and caveats in `docs/RUDP_Final_Project_Report.pdf`, Section 8.11 to 8.13.
 
-- [x] **Smart-RUDP** — tabular Q-learning congestion controller compared with AIMD on three emulated paths (`src/smart_client.c`, `src/rl_cc.h`)
-- [x] **Network design** — four-router OSPF network in Cisco Packet Tracer: VLANs, DHCP, ACL, link failover tested (`network/`)
-- [x] **Wireshark** — Lua dissector for the RUDP header and exported traces (`network/rudp.lua`, `network/*.pcap`)
-- [x] Final report and slides in `docs/final/`
+| Path | AIMD tuned | CUBIC tuned | Neural agent | vs AIMD |
+|---|---|---|---|---|
+| 5G-like | 1.09 s | 1.19 s | **0.92 s** | -15% |
+| Lossy, 2% loss | 7.05 s | 13.92 s | **3.62 s** | -49% |
+| Satellite-like | 11.36 s | 8.26 s | **5.46 s** | -52% |
+| Fast, high delay (3,000 packets) | 8.20 s | 6.52 s | **3.92 s** | -52% |
+| Hostile, 10% loss | 8.34 s | 12.32 s | 8.93 s | tie (n.s.) |
 
-Still to do: case study + video submission (due 21st Oct).
+* The same ordering holds on **real UDP sockets** through an impairment proxy (`eval_proxy.sh`) and in a **virtual-time build of the same
+  sender** (`--vt 1`, calibrated against the real-clock runs in 15 of 15 cells).
+* On **100 random held-out paths** the agent needs 0.53x the time of tuned AIMD, is faster on 89 and never more than 20% slower (`web/vt_random.py`).
+* Honest limits: on a shared bottleneck it takes 68% of the link against tuned AIMD (not a polite neighbour); no gain on the 10% loss path;
+  no kernel netem or multi-machine test yet (`netem_baselines.sh` is provided). Earlier, larger margins were inflated by a timer defect that hurt
+  the baseline more; it is fixed and every number above is re-measured.
 
-## Selective Repeat is the default
-
-The receiver buffers out-of-order packets (64-packet window) and puts a bitmap of what it holds in every ACK; the sender keeps one timer per packet and resends only the missing ones. Go-Back-N is kept for comparison: `--gbn` (smart_client, gateway), `RUDP_GBN=1` (client, chat), `make server_gbn` / `-DRUDP_GBN` (server). Evidence: `eval_ci7.sh`, `results/eval_ci7_summary.txt`; earlier `eval_ci*` results were Go-Back-N.
-
-## Smart-RUDP (learning-based congestion control)
-
-Performance defaults: the neural agent runs with a window cap of 128 and an AIMD hand-over at 10% loss (`--maxcwnd 32 --hybrid 0` or `RUDP_CLASSIC=1` for the original settings); the receive window is 256 packets. Evidence: `eval_perf*.sh`, `results/eval_perf3_summary.txt`.
+## Quick start
 
 ```bash
-make smart                      # builds bin/server and bin/smart_client
-./run_experiments.sh            # trains 40 episodes, evaluates 6 runs per scenario
-python3 analyze.py              # writes smart_graphs/*.png and summary.csv
+make all smart chat            # build (gcc, make; Python 3 + numpy for the tools)
+make test                      # unit, end-to-end, handshake, file integrity, chat interop, simulator
+make fuzz                      # packet parser under AddressSanitizer + UBSan
+
+./filetransfer_demo.sh 2 lossy # send a 2 MB random file over an impaired path with three policies, verify byte-identical
+./bench_loopback.sh            # raw sender speed on loopback
+
+# a transfer by hand
+RUDP_OUT=/tmp/out.bin ./bin/server &                     # receiver writes the file, prints length and hash
+./bin/smart_client --mode deep --emu 0 --file big.bin    # sender (deep = neural agent; aimd, cubic, rl2 also available)
 ```
 
-Modes: `--mode aimd|rl|rl2|deep`. They share the same reliability code; only the window policy differs.
-`rl` is the original table agent, `rl2` is the chat-style table agent (no-shrink rule, window cap 32) and
-`deep` is a small neural network (`src/deep_cc.h`, weights in `results/dqn_chat.txt`, trained by `web/train_deep.py`).
-`--init N` sets the initial window (the chat-style modes use 10; give AIMD `--init 10` for a fair comparison).
-Selective acknowledgments: build `make sack`, run the client with `--sack 1` against `bin/server_sack`.
-`--reorder 1` lets jitter reorder packets on the emulated path.
-The path (delay, jitter, loss, bottleneck rate, queue) is emulated inside the client.
-Result in short: Smart-RUDP matched AIMD on the lossy path and was slower on the 5G-like and
-satellite-like paths, with somewhat fewer retransmissions. Raw results are in `results/`.
-`netem_scenarios.sh` repeats the scenarios with kernel tc/netem (needs root, not used in the report).
-
-## Tests
+Virtual time (seconds instead of minutes, deterministic):
 
 ```bash
-make test        # wire format, end-to-end delivery over UDP, all controller modes, SACK, simulator
+./bin/smart_client --vt 1 --mode deep --delay 25 --jitter 10 --loss 2 --rate 800 --queue 50 --packets 1200 --seed 1
+python3 web/vt_named.py        # five named paths, 100 paired seeds
+python3 web/vt_random.py 100   # 100 random held-out paths
+python3 web/vt_ablate.py       # ablation in the real sender
+python3 web/vt_calib.py        # virtual time vs real clock
 ```
 
-## More experiments (simulated, Python)
+## Layout
 
-`python3 web/stress.py` (48 unseen paths), `web/baselines.py` (plain UDP and a TCP model), `web/sack_test.py`,
-`web/reorder_test.py`, `web/train_deep.py`. Repeated C runs with confidence intervals: `eval_ci.sh`, `eval_ci2.sh`,
-`eval_ci3.sh` with `ci_summary*.py`.
-`web/fairness_test.py` (two flows sharing a bottleneck, Jain index; results in `results/fairness.txt`) and
-`eval_ci4.sh` + `ci_summary4.py` (C transport with equal window caps), `RUDP_RG=1` (simulator with the realistic fast-retransmit rule; results/stress_rg.txt), and
-`--hybrid 0.10` (neural agent hands over to AIMD under heavy loss; `eval_ci5.sh`, `eval_ci6.sh`, results/eval_ci6_summary.txt), and
-`web/ablate.py` (retrains the neural agent with one design choice removed; `results/ablation.txt`). Real kernel TCP/UDP on netem (Linux, root): `netem_baselines.sh`.
+See `docs/ARCHITECTURE.md` for the design. In short: `src/` (C: wire format, server, senders, agents, impairment proxy, chat), `web/` (Python:
+gateway, training, virtual-time harness, studies), `tests/`, `network/` (Packet Tracer configs, Wireshark dissector and traces), `results/`
+(raw data and summaries behind every table), `docs/` (report, slides, guides), `eval_*.sh` + `ci_summary_*.py` (experiments and their summaries).
 
-## RUDP Chat (demo application)
+## How the evidence was produced
 
-A two-way messenger built on the RUDP packet format (`src/chat.c`): per-message sequence numbers,
-cumulative ACKs, Go-Back-N window, timeout and fast retransmit, with simulated packet loss.
+| Question | Script | Output |
+|---|---|---|
+| Final comparison, real clock | `eval_final.sh`, `ci_summary_final.py` | `results/eval_final_*.csv` |
+| Same on real UDP sockets | `eval_proxy.sh`, `ci_summary_proxy.py` | `results/eval_proxy_*.csv` |
+| Two flows on one bottleneck | `eval_fair.sh`, `ci_summary_fair.py` | `results/eval_fair_summary.txt` |
+| Generalisation and ablation | `web/vt_random.py`, `web/vt_ablate.py`, `web/vt_named.py` | `results/vt_*.txt` |
+| Evolution-strategy training in C | `web/es_train.py` | `results/es/` |
+| History: Go-Back-N era, tuning steps | `eval_ci*.sh`, `eval_perf*.sh` | `results/` |
+
+Selective Repeat is the default; Go-Back-N is kept for comparison (`--gbn`, `RUDP_GBN=1`, `make server_gbn`). The original settings of the neural agent
+(cap 32, no pacing, no slow start, no hand-over) are available with `RUDP_CLASSIC=1`.
+
+## Chat
 
 ```bash
-make chat
-./bin/chat 9001 9002 Alice 30     # terminal 1:  my_port peer_port name loss%
-./bin/chat 9002 9001 Bob   30     # terminal 2
+./bin/chat 9001 9002 Alice 30        # terminal chat: my_port peer_port name loss%
+./bin/chat 9002 9001 Bob   30
+python3 web/rudp_web.py --udp 9001 --peer 127.0.0.1:9002 --http 8080     # web gateway with live dashboard (see docs/CHAT_ONLINE.txt)
 ```
+The gateway and the terminal chat speak the same protocol and are tested against each other at 20% loss in both directions.
 
-Type in either terminal. Lines in grey brackets show what the network lost and what RUDP did about it;
-every message still arrives, complete and in order. Ctrl+D quits and prints statistics.
+## Network design and Wireshark
 
-The web version (`web/rudp_web.py`, see `docs/CHAT_ONLINE.txt`) adds a live dashboard (window, in flight, RTT, loss over
-the last 60 s) and `--rto adaptive` for an RFC 6298 retransmission timer with backoff (default stays fixed 300 ms).
+Four routers (R1 to R4), OSPF area 0, two VLANs, DHCP, an extended ACL, tested failover (70 of 71 pings during a link shutdown): configs in `network/cfg/`,
+diagram `network/topology_final.png`. `network/rudp.lua` is a Wireshark dissector (`wireshark -X lua_script:network/rudp.lua`); see `network/WIRESHARK_STEPS.txt`.
 
-## Network design (Cisco Packet Tracer)
+## Status
 
-Four routers (R1-R4), OSPF area 0, two VLANs with router-on-a-stick, DHCP on R1 and R4, and an
-extended ACL blocking students from staff. Device configs are in `network/cfg/`; the diagram is
-`network/topology_final.png`. Tested: OSPF neighbours, routes (metric 2 to the server LAN, 3 to the
-branch LAN), tracert, ACL block, and failover (70 of 71 pings during a link shutdown).
-Packet Tracer cannot run the C programs, so the protocol and the network are validated separately.
-
-## Wireshark
-
-`network/rudp.lua` is a dissector (`wireshark -X lua_script:network/rudp.lua`). See
-`network/WIRESHARK_STEPS.txt`. `network/smart_lossy_*.pcap` are traces exported by the client (`--pcap`).
+Phases 0 to 7 (handshake, Go-Back-N, AIMD, netem, benchmarks), then Smart-RUDP, Selective Repeat, performance work, hardening and the real-socket and
+virtual-time validation described in the report. Case study and video due 21 Oct 2026.
 
 ## Setup (one-time, per machine)
 
@@ -205,21 +200,3 @@ Produces `logs/benchmark_results.csv` — duration and final cwnd at each loss l
   always `tc qdisc show dev lo` to check before assuming a test result is "real."
 - **`grep -oP`** (PCRE regex) isn't reliably available in all WSL setups — the benchmark
   script uses plain `sed`/`grep` instead for portability.
-
-## Project Structure
-```
-rudp/
-├── src/
-│   ├── common.h        # packet struct, protocol constants, AIMD tuning
-│   ├── common.c         # pack/unpack, checksum
-│   ├── client.c          # sliding window sender + congestion control
-│   └── server.c          # Go-Back-N receiver + connection state machine
-├── logs/                  # cwnd_log.csv, benchmark_results.csv (generated at runtime)
-├── plot_cwnd.py           # generates congestion window graph
-├── benchmark.sh           # sweeps loss levels, times each transfer
-├── docs/
-│   ├── abstract.pdf
-│   └── implementation-guide.md
-├── Makefile
-└── README.md
-```

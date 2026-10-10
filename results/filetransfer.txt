@@ -1,0 +1,10 @@
+sending 2 MB over the 'lossy' path (--delay 25 --jitter 10 --loss 2 --rate 800 --queue 50)
+policy                          time    goodput     retx   integrity
+aimd_32                      26.58 s   0.08 MB/s       82   identical (9ddd1440e8099d3b)
+aimd_128                     24.15 s   0.08 MB/s       77   identical (9ddd1440e8099d3b)
+deep                         11.94 s   0.17 MB/s      172   identical (9ddd1440e8099d3b)
+sending 4 MB over the 'fast' path (--delay 60 --jitter 5 --loss 0.1 --rate 3000 --queue 300)
+policy                          time    goodput     retx   integrity
+aimd_32                      34.64 s   0.12 MB/s        6   identical (f354762a23730568)
+aimd_128                     20.98 s   0.19 MB/s        7   identical (f354762a23730568)
+deep                          8.91 s   0.45 MB/s        6   identical (f354762a23730568)

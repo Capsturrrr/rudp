@@ -1,6 +1,6 @@
 flow A     flow B      share A  share B   Jain  n
-aimd_128   aimd_128        46%      54%  0.946  5
-deep       deep            53%      47%  0.982  5
-deep       aimd_128        69%      31%  0.873  5
-deep       aimd_32         79%      21%  0.743  5
-cubic_128  aimd_128        66%      34%  0.897  5
+aimd_128   aimd_128        49%      51%  0.987  6
+deep       deep            50%      50%  0.968  6
+deep       aimd_128        68%      32%  0.876  6
+deep       aimd_32         76%      24%  0.781  6
+cubic_128  aimd_128        61%      39%  0.933  6
